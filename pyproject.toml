@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "social-analytics-mcp"
+version = "0.1.0"
+description = "An MCP server that visualises public Instagram performance with Apify data."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.10,<2",
+  "apify-client>=2.5,<3",
+  "plotly>=6.1,<7",
+  "kaleido>=1.0,<2",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.scripts]
+social-analytics-mcp = "social_analytics_mcp.server:main"
+social-analytics = "social_analytics_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["social_analytics_mcp*"]

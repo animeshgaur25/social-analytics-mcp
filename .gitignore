@@ -1,0 +1,9 @@
+.env
+.venv/
+*.egg-info/
+__pycache__/
+*.py[cod]
+eminem_*.png
+eminem_*.plotly.json
+.gcloudignore
+.DS_Store
