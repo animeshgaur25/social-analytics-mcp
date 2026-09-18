@@ -9,6 +9,7 @@ from .apify import ApifyInstagramFetcher
 from .cache import FollowerHistory, SessionProfileCache
 from .charts import ChartGenerator, DEFAULT_CHART_TYPES, SUPPORTED_CHART_TYPES, SUPPORTED_METRICS
 from .errors import SocialAnalyticsError
+from .insights import build_content_type_table, build_posts_table, generate_post_insights
 from .metrics import average_engagement_rate, normalize_profile, normalize_username, select_posts
 
 
@@ -33,6 +34,30 @@ class SocialAnalyticsTools:
     def get_profile_summary(self, username: str) -> dict[str, Any]:
         try:
             profile, cache_hit = self._profile(username)
+            table = (
+                f"| Metric | Value |\n|---|---|\n"
+                f"| **Username** | @{profile['username']} |\n"
+                f"| **Full Name** | {profile['full_name']} |\n"
+                f"| **Followers** | {profile['followers']:,} |\n"
+                f"| **Following** | {profile['following']:,} |\n"
+                f"| **Posts** | {profile['post_count']:,} |\n"
+                f"| **Verified** | {'Yes' if profile['verified'] else 'No'} |\n"
+                f"| **Bio** | {profile['bio']} |"
+            )
+            following = profile['following']
+            ratio = (profile['followers'] / following) if following else profile['followers']
+            if ratio >= 2.0:
+                ratio_desc = f"Follower-to-following ratio is **{ratio:.1f}x**, indicating strong organic authority."
+            elif ratio >= 1.0:
+                ratio_desc = f"Follower-to-following ratio is **{ratio:.1f}x**, indicating a balanced audience ratio."
+            else:
+                ratio_desc = f"Follower-to-following ratio is **{ratio:.1f}x**."
+
+            insights = [
+                ratio_desc,
+                f"Account has published **{profile['post_count']:,}** posts on Instagram.",
+                f"Verified status: **{'Verified public figure / organization' if profile['verified'] else 'Standard account'}**.",
+            ]
             return {
                 "ok": True,
                 "source": {"provider": "Apify", "actor": "apify/instagram-profile-scraper", "cache_hit": cache_hit},
@@ -40,6 +65,8 @@ class SocialAnalyticsTools:
                     key: profile[key]
                     for key in ("username", "full_name", "followers", "following", "post_count", "bio", "verified")
                 },
+                "markdown_table": table,
+                "insights": insights,
             }
         except SocialAnalyticsError as exc:
             return self._error(exc)
@@ -54,6 +81,8 @@ class SocialAnalyticsTools:
                 return self._error_message(
                     "No posts matched the requested date range. The Instagram Profile Scraper actor exposes only its latest posts."
                 )
+            md_table, summary_table = build_posts_table(posts)
+            insights = generate_post_insights(profile["username"], posts, profile["followers"])
             return {
                 "ok": True,
                 "source": {"provider": "Apify", "actor": "apify/instagram-profile-scraper", "cache_hit": cache_hit},
@@ -63,6 +92,10 @@ class SocialAnalyticsTools:
                 "posts_returned": len(posts),
                 "average_engagement_rate": average_engagement_rate(posts),
                 "average_engagement_rate_percent": round(average_engagement_rate(posts) * 100, 4),
+                "markdown_table": md_table,
+                "summary_table": summary_table,
+                "insights": insights["key_takeaways"],
+                "recommendations": insights["recommendations"],
                 "posts": posts,
             }
         except SocialAnalyticsError as exc:
@@ -78,8 +111,6 @@ class SocialAnalyticsTools:
     ) -> dict[str, Any]:
         try:
             profile, cache_hit = self._profile(username)
-            # A chart operates over every source post in the range. The actor's
-            # documented payload contains its latest twelve posts at most.
             posts, applied_range = select_posts(profile["posts"], date_range, post_limit=12)
             chart = self._chart_generator.generate(
                 username=profile["username"],
@@ -89,12 +120,30 @@ class SocialAnalyticsTools:
                 chart_type=chart_type,
                 top_n=top_n,
             )
+
+            # Choose appropriate table based on metric
+            if metric == "content_type_comparison":
+                md_table, summary_table = build_content_type_table(posts)
+            elif metric == "top_posts_by_engagement":
+                ranked = sorted(posts, key=lambda p: int(p.get("engagement", 0)), reverse=True)
+                md_table, summary_table = build_posts_table(ranked, limit=top_n)
+            else:
+                md_table, summary_table = build_posts_table(posts)
+
+            insights = generate_post_insights(
+                profile["username"], posts, profile["followers"], metric=metric
+            )
+
             return {
                 "ok": True,
                 "source": {"provider": "Apify", "actor": "apify/instagram-profile-scraper", "cache_hit": cache_hit},
                 "username": profile["username"],
                 "date_range_applied": applied_range,
                 "posts_used": len(posts),
+                "markdown_table": md_table,
+                "summary_table": summary_table,
+                "insights": insights["key_takeaways"],
+                "recommendations": insights["recommendations"],
                 **chart,
             }
         except SocialAnalyticsError as exc:

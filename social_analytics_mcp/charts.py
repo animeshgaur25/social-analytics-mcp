@@ -1,12 +1,14 @@
-"""Plotly chart construction and PNG/base64 encoding."""
+"""Plotly chart construction, rich interactive styling, and image/HTML export."""
 
 from __future__ import annotations
 
 import base64
 import json
+import re
 from typing import Any
 
 from .errors import ChartRenderingError, InvalidRequestError, NoDataError
+from .insights import clean_caption
 
 SUPPORTED_METRICS = {
     "follower_growth",
@@ -23,9 +25,11 @@ DEFAULT_CHART_TYPES = {
     "content_type_comparison": "bar",
 }
 
+FONT_FAMILY = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+
 
 class ChartGenerator:
-    """Produces a static PNG plus a portable Plotly spec for interactive clients."""
+    """Produces a static PNG, a Plotly spec, and interactive HTML widgets."""
 
     def build_figure(
         self,
@@ -37,11 +41,6 @@ class ChartGenerator:
         chart_type: str | None,
         top_n: int,
     ) -> tuple[Any, str]:
-        """Create the interactive Plotly figure without exporting an image.
-
-        Keeping figure construction separate makes chart semantics directly
-        testable without a running browser/Kaleido installation.
-        """
         metric = metric.strip().lower()
         if metric not in SUPPORTED_METRICS:
             raise InvalidRequestError(
@@ -67,14 +66,31 @@ class ChartGenerator:
             template="plotly_white",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
-            font={"family": "Inter, Arial, sans-serif", "color": "#1f2937"},
-            margin={"l": 60, "r": 30, "t": 72, "b": 60},
+            font={"family": FONT_FAMILY, "color": "#0f172a"},
+            margin={"l": 64, "r": 36, "t": 88, "b": 70},
             hovermode="x unified" if resolved_chart_type == "line" else "closest",
+            hoverlabel={
+                "bgcolor": "#0f172a",
+                "font_size": 13,
+                "font_family": FONT_FAMILY,
+                "font_color": "#ffffff",
+                "bordercolor": "#334155",
+            },
             width=1100,
             height=620,
         )
-        figure.update_xaxes(showgrid=False, linecolor="#d1d5db")
-        figure.update_yaxes(gridcolor="#e5e7eb", zerolinecolor="#e5e7eb")
+        figure.update_xaxes(
+            showgrid=False,
+            linecolor="#cbd5e1",
+            linewidth=1.2,
+            tickfont={"size": 11, "family": FONT_FAMILY, "color": "#475569"},
+        )
+        figure.update_yaxes(
+            gridcolor="#f1f5f9",
+            gridwidth=1,
+            zerolinecolor="#e2e8f0",
+            tickfont={"size": 11, "family": FONT_FAMILY, "color": "#475569"},
+        )
 
         return figure, resolved_chart_type
 
@@ -88,7 +104,6 @@ class ChartGenerator:
         chart_type: str | None,
         top_n: int,
     ) -> dict[str, Any]:
-        """Create a Plotly figure, its PNG representation, and its JSON spec."""
         figure, resolved_chart_type = self.build_figure(
             username=username,
             metric=metric,
@@ -105,14 +120,20 @@ class ChartGenerator:
                 "Install the project's Plotly and Kaleido dependencies and run 'plotly_get_chrome' if needed, then retry."
             ) from exc
 
-        # JSON is deliberately included alongside the PNG. MCP clients that can
-        # render Plotly may use it to retain hover/zoom/pan interactions.
+        # Generate responsive standalone HTML widget
+        interactive_html = figure.to_html(
+            include_plotlyjs="cdn",
+            full_html=False,
+            config={"responsive": True, "displayModeBar": True, "displaylogo": False},
+        )
+
         return {
             "metric": metric.strip().lower(),
             "chart_type": resolved_chart_type,
             "image_mime_type": "image/png",
             "image_png_base64": base64.b64encode(png).decode("ascii"),
             "interactive_chart_spec": json.loads(figure.to_json()),
+            "interactive_html": interactive_html,
         }
 
     @staticmethod
@@ -136,12 +157,30 @@ class ChartGenerator:
         x = [entry["timestamp"] for entry in history]
         y = [entry["followers"] for entry in history]
         if chart_type == "bar":
-            figure = go.Figure(go.Bar(x=x, y=y, marker_color="#4f46e5"))
-        else:
-            figure = go.Figure(
-                go.Scatter(x=x, y=y, mode="lines+markers", line={"color": "#4f46e5", "width": 3})
+            trace = go.Bar(
+                x=x,
+                y=y,
+                marker=dict(color="#6366f1", cornerradius=8),
+                hovertemplate="<b>%{x}</b><br>Followers: %{y:,}<extra></extra>",
             )
-        figure.update_layout(title=f"@{username} follower snapshots")
+        else:
+            trace = go.Scatter(
+                x=x,
+                y=y,
+                mode="lines+markers",
+                line=dict(color="#6366f1", width=3),
+                marker=dict(size=8, color="#6366f1", line=dict(width=2, color="#ffffff")),
+                fill="tozeroy",
+                fillcolor="rgba(99, 102, 241, 0.10)",
+                hovertemplate="<b>%{x}</b><br>Followers: %{y:,}<extra></extra>",
+            )
+        figure = go.Figure(trace)
+        figure.update_layout(
+            title=dict(
+                text=f"<b>@{username}</b> · Follower Growth History<br><span style='font-size:12px;color:#64748b;'>Session-tracked follower count checkpoints</span>",
+                font=dict(size=18, color="#0f172a"),
+            ),
+        )
         figure.update_yaxes(title="Followers", tickformat=",")
         return figure
 
@@ -150,26 +189,65 @@ class ChartGenerator:
         ordered = sorted(posts, key=lambda post: post["timestamp"] or "")
         if not ordered:
             raise NoDataError("No dated posts matched this range, so engagement cannot be charted.")
-        x = [post["timestamp"] for post in ordered]
+        x = [post["timestamp"][:10] if post.get("timestamp") else "N/A" for post in ordered]
         y = [post["engagement_rate_percent"] for post in ordered]
+        avg_rate = sum(y) / len(y)
+
         hover = [
-            f"{post['media_type'].title()}<br>{post['likes']:,} likes · {post['comments']:,} comments"
+            f"<b>{clean_caption(post.get('caption'), max_length=40)}</b><br>"
+            f"Format: {post['media_type'].title()}<br>"
+            f"Likes: {post['likes']:,} · Comments: {post['comments']:,}<br>"
+            f"Engagement Rate: <b>{post['engagement_rate_percent']:.2f}%</b>"
             for post in ordered
         ]
+
+        figure = go.Figure()
         if chart_type == "bar":
-            trace = go.Bar(x=x, y=y, marker_color="#0ea5e9", customdata=hover, hovertemplate="%{customdata}<br>%{y:.3f}%<extra></extra>")
-        else:
-            trace = go.Scatter(
-                x=x,
-                y=y,
-                mode="lines+markers",
-                line={"color": "#0ea5e9", "width": 3},
-                customdata=hover,
-                hovertemplate="%{customdata}<br>%{y:.3f}%<extra></extra>",
+            figure.add_trace(
+                go.Bar(
+                    x=x,
+                    y=y,
+                    marker=dict(color="#0284c7", cornerradius=8),
+                    customdata=hover,
+                    hovertemplate="%{customdata}<extra></extra>",
+                    name="Post Rate",
+                )
             )
-        figure = go.Figure(trace)
-        figure.update_layout(title=f"@{username} engagement rate over time")
+        else:
+            figure.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    mode="lines+markers",
+                    line=dict(color="#0284c7", width=3),
+                    marker=dict(size=9, color="#0284c7", line=dict(width=2, color="#ffffff")),
+                    fill="tozeroy",
+                    fillcolor="rgba(2, 132, 199, 0.10)",
+                    customdata=hover,
+                    hovertemplate="%{customdata}<extra></extra>",
+                    name="Engagement Rate",
+                )
+            )
+
+        # Add horizontal benchmark line for average engagement rate
+        figure.add_hline(
+            y=avg_rate,
+            line_dash="dot",
+            line_color="#94a3b8",
+            line_width=1.5,
+            annotation_text=f"Average: {avg_rate:.2f}%",
+            annotation_position="top right",
+            annotation_font=dict(size=11, color="#64748b"),
+        )
+
+        figure.update_layout(
+            title=dict(
+                text=f"<b>@{username}</b> · Engagement Rate Over Time<br><span style='font-size:12px;color:#64748b;'>Calculated as (likes + comments) / followers per post</span>",
+                font=dict(size=18, color="#0f172a"),
+            ),
+        )
         figure.update_yaxes(title="Engagement rate (%)", ticksuffix="%")
+        figure.update_xaxes(title="Publication Date")
         return figure
 
     @staticmethod
@@ -177,41 +255,104 @@ class ChartGenerator:
         ranked = sorted(posts, key=lambda post: post["engagement"], reverse=True)[:top_n]
         if not ranked:
             raise NoDataError("No posts matched this range, so top posts cannot be charted.")
-        labels = [post["shortcode"] or (post["timestamp"] or "Unknown date")[:10] for post in ranked]
+
+        # Show short length caption on axis instead of hash id!
+        labels = [clean_caption(post.get("caption"), max_length=24) for post in ranked]
         values = [post["engagement"] for post in ranked]
         hover = [
-            f"{post['media_type'].title()}<br>{post['likes']:,} likes · {post['comments']:,} comments<br>{post['engagement_rate_percent']:.3f}% rate"
+            f"<b>{clean_caption(post.get('caption'), max_length=50)}</b><br>"
+            f"Format: {post['media_type'].title()}<br>"
+            f"Likes: {post['likes']:,} · Comments: {post['comments']:,}<br>"
+            f"Total Engagement: <b>{post['engagement']:,}</b><br>"
+            f"Engagement Rate: <b>{post['engagement_rate_percent']:.2f}%</b>"
             for post in ranked
         ]
+
         if chart_type == "line":
-            trace = go.Scatter(x=labels, y=values, mode="lines+markers", line={"color": "#f97316", "width": 3})
+            trace = go.Scatter(
+                x=labels,
+                y=values,
+                mode="lines+markers",
+                line=dict(color="#f97316", width=3.5),
+                marker=dict(size=9, color="#f97316", line=dict(width=2, color="#ffffff")),
+                customdata=hover,
+                hovertemplate="%{customdata}<extra></extra>",
+            )
         else:
-            trace = go.Bar(x=labels, y=values, marker_color="#f97316")
-        trace.update(customdata=hover, hovertemplate="%{customdata}<br>%{y:,} total engagements<extra></extra>")
+            # Modern bar with cornerradius and data labels
+            trace = go.Bar(
+                x=labels,
+                y=values,
+                marker=dict(color="#f97316", cornerradius=8),
+                text=[f"{v:,}" for v in values],
+                textposition="outside",
+                textfont=dict(size=11, color="#475569", family=FONT_FAMILY),
+                customdata=hover,
+                hovertemplate="%{customdata}<extra></extra>",
+            )
+
         figure = go.Figure(trace)
-        figure.update_layout(title=f"@{username} top {len(ranked)} posts by engagement")
+        figure.update_layout(
+            title=dict(
+                text=f"<b>@{username}</b> · Top {len(ranked)} Posts by Engagement<br><span style='font-size:12px;color:#64748b;'>Ranked by total likes + comments (labeled by caption snippet)</span>",
+                font=dict(size=18, color="#0f172a"),
+            ),
+        )
         figure.update_yaxes(title="Likes + comments", tickformat=",")
-        figure.update_xaxes(title="Post")
+        figure.update_xaxes(title="Post (Caption snippet)")
         return figure
 
     @staticmethod
     def _content_types(go: Any, username: str, posts: list[dict[str, Any]], chart_type: str) -> Any:
         groups: dict[str, list[float]] = {}
+        counts: dict[str, int] = {}
         for post in posts:
-            groups.setdefault(post["media_type"], []).append(post["engagement_rate_percent"])
+            m_type = post["media_type"].title()
+            groups.setdefault(m_type, []).append(post["engagement_rate_percent"])
+            counts[m_type] = counts.get(m_type, 0) + 1
+
         if not groups:
             raise NoDataError("No posts matched this range, so content types cannot be compared.")
+
         labels = sorted(groups)
         values = [sum(groups[label]) / len(groups[label]) for label in labels]
-        counts = [len(groups[label]) for label in labels]
-        hover = [f"{count} post{'s' if count != 1 else ''}" for count in counts]
+        hover = [
+            f"<b>{label}</b><br>"
+            f"Posts Analyzed: {counts[label]}<br>"
+            f"Average Engagement Rate: <b>{val:.2f}%</b>"
+            for label, val in zip(labels, values)
+        ]
+
         if chart_type == "line":
-            trace = go.Scatter(x=labels, y=values, mode="lines+markers", line={"color": "#10b981", "width": 3})
+            trace = go.Scatter(
+                x=labels,
+                y=values,
+                mode="lines+markers",
+                line=dict(color="#10b981", width=3.5),
+                marker=dict(size=9, color="#10b981", line=dict(width=2, color="#ffffff")),
+                customdata=hover,
+                hovertemplate="%{customdata}<extra></extra>",
+            )
         else:
-            trace = go.Bar(x=labels, y=values, marker_color="#10b981")
-        trace.update(customdata=hover, hovertemplate="%{x}: %{y:.3f}%<br>%{customdata}<extra></extra>")
+            trace = go.Bar(
+                x=labels,
+                y=values,
+                marker=dict(color="#10b981", cornerradius=8),
+                text=[f"{v:.2f}%" for v in values],
+                textposition="outside",
+                textfont=dict(size=11, color="#475569", family=FONT_FAMILY),
+                customdata=hover,
+                hovertemplate="%{customdata}<extra></extra>",
+            )
+
         figure = go.Figure(trace)
-        figure.update_layout(title=f"@{username} average engagement by content type")
+        figure.update_layout(
+            title=dict(
+                text=f"<b>@{username}</b> · Average Engagement by Content Type<br><span style='font-size:12px;color:#64748b;'>Comparison of Reels, Carousels, Static Images, and Videos</span>",
+                font=dict(size=18, color="#0f172a"),
+            ),
+        )
         figure.update_yaxes(title="Average engagement rate (%)", ticksuffix="%")
-        figure.update_xaxes(title="Content type")
+        figure.update_xaxes(title="Content Format")
         return figure
+
