@@ -78,6 +78,7 @@ async def run_live_smoke_test() -> None:
                                 "metric": metric,
                                 "chart_type": chart_type,
                                 "date_range": "all",
+                                "output": "both",
                             },
                         )
                     ),

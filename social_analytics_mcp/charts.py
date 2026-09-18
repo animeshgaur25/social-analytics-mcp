@@ -103,6 +103,7 @@ class ChartGenerator:
         follower_history: list[dict[str, Any]],
         chart_type: str | None,
         top_n: int,
+        output: str = "png",   # "png" | "spec" | "both"
     ) -> dict[str, Any]:
         figure, resolved_chart_type = self.build_figure(
             username=username,
@@ -112,30 +113,28 @@ class ChartGenerator:
             chart_type=chart_type,
             top_n=top_n,
         )
-        try:
-            png = figure.to_image(format="png", width=1100, height=620, scale=2)
-        except Exception as exc:
-            raise ChartRenderingError(
-                "The interactive chart was created, but PNG export could not start a compatible browser. "
-                "Install the project's Plotly and Kaleido dependencies and run 'plotly_get_chrome' if needed, then retry."
-            ) from exc
 
-        # Generate responsive standalone HTML widget
-        interactive_html = figure.to_html(
-            include_plotlyjs="cdn",
-            full_html=False,
-            config={"responsive": True, "displayModeBar": True, "displaylogo": False},
-        )
-
-        return {
+        result: dict[str, Any] = {
             "metric": metric.strip().lower(),
             "chart_type": resolved_chart_type,
-            "image_mime_type": "image/png",
-            "image_png_base64": base64.b64encode(png).decode("ascii"),
-            "interactive_chart_spec": json.loads(figure.to_json()),
-            "interactive_html": interactive_html,
         }
 
+        if output in ("png", "both"):
+            try:
+                png = figure.to_image(format="png", width=800, height=500, scale=1)
+            except Exception as exc:
+                raise ChartRenderingError(
+                    "The interactive chart was created, but PNG export could not start a compatible browser. "
+                    "Install the project's Plotly and Kaleido dependencies and run 'plotly_get_chrome' if needed, then retry."
+                ) from exc
+            result["image_mime_type"] = "image/png"
+            result["image_png_base64"] = base64.b64encode(png).decode("ascii")
+
+        if output in ("spec", "both"):
+            result["interactive_chart_spec"] = json.loads(figure.to_json())
+
+        return result
+    
     @staticmethod
     def _plotly() -> Any:
         try:

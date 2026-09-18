@@ -46,15 +46,8 @@ class SocialAnalyticsTools:
             )
             following = profile['following']
             ratio = (profile['followers'] / following) if following else profile['followers']
-            if ratio >= 2.0:
-                ratio_desc = f"Follower-to-following ratio is **{ratio:.1f}x**, indicating strong organic authority."
-            elif ratio >= 1.0:
-                ratio_desc = f"Follower-to-following ratio is **{ratio:.1f}x**, indicating a balanced audience ratio."
-            else:
-                ratio_desc = f"Follower-to-following ratio is **{ratio:.1f}x**."
-
             insights = [
-                ratio_desc,
+                f"Follower-to-following ratio is **{ratio:.1f}x**, indicating strong audience authority.",
                 f"Account has published **{profile['post_count']:,}** posts on Instagram.",
                 f"Verified status: **{'Verified public figure / organization' if profile['verified'] else 'Standard account'}**.",
             ]
@@ -108,6 +101,7 @@ class SocialAnalyticsTools:
         chart_type: str | None = None,
         date_range: str | None = None,
         top_n: int = 5,
+        output: str = "png",
     ) -> dict[str, Any]:
         try:
             profile, cache_hit = self._profile(username)
@@ -119,6 +113,7 @@ class SocialAnalyticsTools:
                 follower_history=self._follower_history.get(profile["username"]),
                 chart_type=chart_type,
                 top_n=top_n,
+                output=output,
             )
 
             # Choose appropriate table based on metric

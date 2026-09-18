@@ -32,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--date-range", default=None)
     dashboard.add_argument("--top-n", type=int, default=5)
     dashboard.add_argument("--png-output", type=Path, help="Optionally write the returned PNG to this path.")
+    dashboard.add_argument(
+        "--output",
+        choices=("png", "spec", "both"),
+        default="png",
+        help="Which chart representation(s) to request from the tool.",
+    )
 
     commands.add_parser("metrics", help="Call list_available_metrics")
     return parser

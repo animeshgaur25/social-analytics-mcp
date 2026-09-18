@@ -265,6 +265,7 @@ async def generate_dashboard(
     date_range: str | None = None,
     top_n: int = 5,
     ctx: Context | None = None,
+    output: str = "png",
 ) -> dict:
     """Generate a light-theme social-performance dashboard for a public profile.
 
@@ -276,7 +277,7 @@ async def generate_dashboard(
     start = time.monotonic()
     client_id = getattr(ctx, "client_id", None) if ctx else None
     result = await asyncio.to_thread(
-        tools.generate_dashboard, username, metric, chart_type, date_range, top_n
+        tools.generate_dashboard, username, metric, chart_type, date_range, top_n, output
     )
     duration_ms = (time.monotonic() - start) * 1000
     tracker.record_call(
