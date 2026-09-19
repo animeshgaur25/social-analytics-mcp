@@ -43,7 +43,9 @@ class UsageTracker:
             if not ok and error_message:
                 self._error_counts[tool_name] += 1
 
-        # Emit structured log for Google Cloud Logging
+        # Stdio MCP reserves stdout exclusively for JSON-RPC messages. Cloud
+        # Run also captures stderr as structured application logs, so stderr
+        # safely supports both local MCP clients and hosted observability.
         log_entry = {
             "severity": "INFO" if ok else "WARNING",
             "event": "mcp_tool_invocation",
@@ -59,8 +61,8 @@ class UsageTracker:
             log_entry["error"] = error_message
 
         try:
-            sys.stdout.write(json.dumps(log_entry) + "\n")
-            sys.stdout.flush()
+            sys.stderr.write(json.dumps(log_entry) + "\n")
+            sys.stderr.flush()
         except Exception:
             pass
 

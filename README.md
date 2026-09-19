@@ -1,175 +1,233 @@
 # social-analytics-mcp
 
-`social-analytics-mcp` is a Python MCP server for asking an AI assistant for
-Instagram performance data and charts, without opening Instagram analytics.
-It uses Apify's `apify/instagram-profile-scraper` actor for public profile
-data, then calculates metrics locally.
+`social-analytics-mcp` is a production-grade Python Model Context Protocol (MCP) server for querying Instagram performance analytics, generating interactive Plotly dashboards, rendering structured markdown data tables, and delivering actionable audience insights—all without opening Instagram.
 
-Plotly is used because it provides both sides of the product experience: a
-high-quality PNG for ordinary MCP clients and a portable JSON chart definition
-that compatible clients can render with hover, zoom, and pan interactions.
-Charts use a light theme.
+It uses Apify's `apify/instagram-profile-scraper` actor for retrieving public profile and post metadata, computes metrics locally, and produces interactive Plotly visualisations (with lightweight PNG fallback rendering via Kaleido).
 
-## What it exposes
+---
 
-| Tool | Purpose |
-| --- | --- |
-| `get_profile_summary(username)` | Returns public profile name, bio, follower/following/post counts, and verified status. |
-| `get_engagement_metrics(username, date_range, post_limit)` | Returns per-post likes, comments, image/video/carousel/reel type, engagement, and engagement rate. |
-| `generate_dashboard(username, metric, chart_type, date_range)` | Returns a base64 PNG and Plotly interactive spec. `top_n` is an optional extra argument for ranked-post charts. |
-| `list_available_metrics()` | Describes the server's current metrics, chart defaults, and source limitations. |
+## What It Exposes
 
-An engagement rate is returned both as an unscaled decimal matching
-`(likes + comments) / followers` and as a convenience percent field. Dashboard
-axes use the percent field.
+| Tool | Parameters | Purpose & Output |
+| --- | --- | --- |
+| `audit_profile` | `username`, `date_range`, `post_limit`, `top_n`, `output` | **All-in-one comprehensive audit**: returns profile stats, authority ratio, all 3 dashboard views (top posts, engagement trajectory, content types) with charts, formatted markdown tables, and AI recommendations in a single call. |
+| `get_profile_summary` | `username` | Returns follower, following, and post counts, verification status, ratio authority analysis, and a structured Markdown summary table. |
+| `get_engagement_metrics` | `username`, `date_range`, `post_limit` | Returns post-level metrics (likes, comments, media type, engagement rate), a sorted Markdown post table, and content-type breakdowns. |
+| `generate_dashboard` | `username`, `metric`, `chart_type`, `date_range`, `top_n`, `output` | Generates a styled light-theme dashboard. Supports `output="png"`, `"spec"` (Plotly JSON), or `"both"`. Use `metric="all"` to trigger the full profile audit. |
+| `list_available_metrics` | _none_ | Lists supported metrics (`engagement_rate_over_time`, `top_posts_by_engagement`, `content_type_comparison`, `follower_growth`, `all`), default chart types, and operational bounds. |
 
-Supported `date_range` values are `all`, a trailing window such as `30d`, or
-an inclusive ISO range such as `2026-01-01:2026-01-31`.
+### Dashboard Metrics & Outputs
 
-## Setup
+- **`all` / `audit_profile`**: Full 360-degree account audit returning all three chart views below, two data tables, and an executive markdown report in one call.
+- **`top_posts_by_engagement`**: Bar chart ranking top posts labeled with truncated caption snippets.
+- **`engagement_rate_over_time`**: Line chart showing engagement trajectory across chronological posts.
+- **`content_type_comparison`**: Bar chart comparing average engagement by format (Reels, Carousels, Images, Videos).
+- **`follower_growth`**: Line chart displaying session-tracked follower growth across fetches.
 
-1. Create and activate a Python 3.10+ virtual environment.
-2. Install the server:
 
-   ```bash
-   pip install -e .
-   ```
+Each dashboard call returns:
+1. **Interactive Spec (`interactive_chart_spec`)**: Full Plotly JSON structure for rich frontends (hover cards, zoom, pan, responsive labels).
+2. **High-Res PNG (`image_png_base64`)**: Base64-encoded image for standard MCP chat clients.
+3. **Markdown Table (`markdown_table`)**: Clean, formatted tabular presentation of the underlying data.
+4. **Insights & Recommendations (`insights`)**: Takeaways including top formats, engagement rates, benchmarks, and tactical recommendations.
 
-3. Copy the example settings and add an Apify API token that may run the actor:
+---
 
-   ```bash
-   cp .env.example .env
-   ```
+## Setup & Installation
 
-4. Set `APIFY_API_TOKEN` in `.env`. Do not commit this file.
+### 1. Environment & Dependencies
 
-Plotly uses Kaleido to export the required PNG. With Kaleido 1.x, install a
-supported Chrome/Chromium browser if it is not already present; run
-`plotly_get_chrome` if Kaleido reports that it cannot find one.
-
-## Run it with an MCP client
-
-The server speaks stdio by default:
+Requires Python 3.10+:
 
 ```bash
-python -m social_analytics_mcp
+# Clone the repository
+git clone https://github.com/animeshgaur25/social-analytics-mcp.git
+cd social-analytics-mcp
+
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -e .
 ```
 
-For a desktop MCP client, register the project virtual environment's Python
-interpreter and the command `-m social_analytics_mcp`, with this project as its
-working directory. The process must receive `APIFY_API_TOKEN` through its
-environment or the `.env` file.
-
-Example client configuration shape:
-
-```json
-{
-  "mcpServers": {
-    "social-analytics-mcp": {
-      "command": "/absolute/path/to/.venv/bin/python",
-      "args": ["-m", "social_analytics_mcp"],
-      "cwd": "/absolute/path/to/social-analytics-mcp"
-    }
-  }
-}
-```
-
-Each `generate_dashboard` response includes:
-
-- `image_png_base64` and `image_mime_type`, which satisfy clients that display
-  chart images.
-- `interactive_chart_spec`, a Plotly JSON object that an interactive client
-  can render without re-querying Apify.
-
-## Deploy to Google Cloud Run
-
-The repository includes a Cloud Run container configuration and a deployment
-script. The deployed service uses MCP's Streamable HTTP transport at `/mcp`,
-binds to Cloud Run's `PORT`, and keeps `APIFY_API_TOKEN` in Secret Manager.
-
-The default deployment is **authenticated**, which prevents an exposed service
-from being used to spend your Apify quota. Grant the intended callers the Cloud
-Run Invoker role, then configure their MCP client with the printed endpoint
-(`https://SERVICE-URL/mcp`) and Google authentication.
-
-From the project directory, with Google Cloud CLI installed and authenticated:
+### 2. Configure Environment Variables
 
 ```bash
-APIFY_API_TOKEN='your-token' ./scripts/deploy_cloud_run.sh YOUR_PROJECT_ID YOUR_REGION
+cp .env.example .env
 ```
 
-For example, choose a nearby Cloud Run region such as `asia-south1` only if it
-matches the region you want for the service. The script enables required APIs,
-creates a dedicated service account, stores/rotates the Secret Manager value,
-deploys the service, and prints the endpoint.
-
-To permit an external, unauthenticated MCP client, explicitly replace the
-script's `--no-allow-unauthenticated` with `--allow-unauthenticated` and add a
-separate authentication layer before production use. Public access would let
-any caller trigger paid Apify jobs.
-
-## Terminal testing
-
-The CLI invokes the same framework-independent handlers as MCP:
+Edit `.env` and set your credentials:
 
 ```bash
-social-analytics metrics
-social-analytics profile eminem
-social-analytics engagement eminem --date-range 90d --post-limit 12
-social-analytics dashboard eminem engagement_rate_over_time --png-output eminem.png
+# Required: Apify token for Instagram scraping
+APIFY_API_TOKEN=your_apify_token_here
+
+# Optional: Gemini API Key for AI-powered caption critique & influencer reports
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# Optional: Operational settings
+APIFY_POLL_INTERVAL_SECONDS=2
+APIFY_RUN_TIMEOUT_SECONDS=180
+PROFILE_CACHE_TTL_SECONDS=900
 ```
 
-Run the live test script against the public `@eminem` account:
+> **Note on Kaleido**: PNG export utilizes Kaleido 1.x. If Chromium is not automatically detected on your system, run `plotly_get_chrome` to install a local headless Chromium build.
+
+---
+
+## Can You Use a Gemini API Key?
+
+**Yes!** While Apify is used to retrieve public Instagram engagement signals, a **Google Gemini API Key** (`GEMINI_API_KEY`) can be incorporated to provide generative AI capabilities:
+
+- **Qualitative Caption & Hook Critique**: Analyzing which copywriting hooks and hashtags drive the highest retention and comments.
+- **Audience Sentiment & Brand Safety**: Evaluating community reactions, sentiment tone, and brand safety for sponsorship screening.
+- **Executive Influencer Briefs**: Synthesizing raw metrics into ready-to-share campaign pitch decks and collaboration strategies.
+
+To use Gemini, add `GEMINI_API_KEY` in your `.env`. You can use Google's `google-genai` SDK or call Gemini models (`gemini-2.5-flash`, `gemini-1.5-pro`) to process the structured tables and metric outputs returned by this server.
+
+---
+
+## Testing with the Cristiano Ronaldo Example
+
+The server includes end-to-end tests and CLI tools tested with Cristiano Ronaldo's public account (`@cristiano`).
+
+### 1. Run the Automated Live Smoke Test
+
+The test suite exercises every MCP tool via stdio, generates dashboards, and exports both PNG images and interactive Plotly JSON specs:
 
 ```bash
 python tests/test_e2e.py
 ```
 
-It starts the server over MCP stdio, calls every exposed tool, and creates
-three Plotly dashboards: engagement over time, top posts, and content-type
-comparison. It writes each as both a PNG and an interactive
-`*.plotly.json` specification. It is
-intentionally opt-in: every fresh profile request runs the paid Apify actor.
-
-## Design
-
+**Output:**
 ```text
-MCP tool definitions (server.py)
-       ↓
-Tool handlers (tools.py) ── session cache + follower snapshots
-       ↓                         ↓
-Apify run lifecycle (apify.py)   metric transformations (metrics.py)
-                                         ↓
-                              Plotly PNG + interactive spec (charts.py)
+✓ list_available_metrics
+✓ get_profile_summary
+✓ get_engagement_metrics
+✓ generate_dashboard (engagement_rate_over_time)
+✓ Wrote cristiano_engagement_rate_over_time.png and cristiano_engagement_rate_over_time.plotly.json
+✓ generate_dashboard (top_posts_by_engagement)
+✓ Wrote cristiano_top_posts_by_engagement.png and cristiano_top_posts_by_engagement.plotly.json
+✓ generate_dashboard (content_type_comparison)
+✓ Wrote cristiano_content_type_comparison.png and cristiano_content_type_comparison.plotly.json
 ```
 
-`apify.py` explicitly starts an actor run, polls its status until it reaches a
-terminal state, then reads the run's default dataset. This makes timeout,
-rate-limit, empty-result, and actor-failure messages safe and actionable
-instead of leaking a traceback.
+### 2. Offline Component Tests
 
-The cache is in-process and has a 15-minute default TTL. Repeated requests for
-the same username—including different date ranges—reuse the same latest-post
-payload. Set `PROFILE_CACHE_TTL_SECONDS` if a different freshness/cost tradeoff
-is appropriate. Fresh re-fetches are retained as follower snapshots for the
-session-only follower-growth chart.
+Run offline unit tests verifying data transformations, mock Apify responses, and Plotly serialization without consuming Apify credits:
 
-## Apify data limits to plan for
+```bash
+python tests/test_components.py
+```
 
-- `apify/instagram-profile-scraper` returns public profile data and the latest
-  posts; its current listing documents the latest **12** posts. `post_limit`
-  can only narrow that returned set; it cannot fetch older posts from this
-  actor. For deeper historical post coverage, add Apify's Instagram Post
-  Scraper behind another source adapter.
-- The selected actor returns a current follower count, not a historical series.
-  `follower_growth` works only after this server has collected two fresh
-  session snapshots (or after a future persistence/historical-data adapter is
-  added).
-- Actor runs are asynchronous and can take seconds or longer. The default MCP
-  timeout is 180 seconds and can be configured with
-  `APIFY_RUN_TIMEOUT_SECONDS`.
-- Apify pricing, quotas, and rate limits are account/actor-plan dependent. The
-  server returns a retry-friendly message for upstream rate limits, but does
-  not silently retry paid runs.
-- Instagram can change, omit, or delay public counters. Results should be used
-  as scraped public signals, not as first-party Instagram Insights.
+---
+
+## CLI Usage (Cristiano Ronaldo Example)
+
+You can execute all analytics functions directly from your terminal using the `social-analytics` CLI:
+
+### Profile Summary
+```bash
+social-analytics profile cristiano
+```
+*Output snippet:*
+```json
+{
+  "profile": {
+    "username": "cristiano",
+    "full_name": "Cristiano Ronaldo",
+    "followers": 679680239,
+    "following": 635,
+    "post_count": 4131,
+    "verified": true
+  },
+  "markdown_table": "| Metric | Value |\n|---|---|\n| **Username** | @cristiano |\n| **Full Name** | Cristiano Ronaldo |\n| **Followers** | 679,680,239 |\n| **Following** | 635 |\n| **Posts** | 4,131 |\n| **Verified** | Yes |",
+  "insights": [
+    "Follower-to-following ratio is **1070362.6x**, indicating strong audience authority.",
+    "Account has published **4,131** posts on Instagram.",
+    "Verified status: **Verified public figure / organization**."
+  ]
+}
+```
+
+### Full Account Audit (Single Call)
+Run the entire 360-degree audit with all 3 charts, tables, and insights:
+
+```bash
+# Returns top posts, 90-day trajectory, and format comparison in one go
+social-analytics audit cristiano --output spec
+
+# Or save images with output both
+social-analytics audit cristiano --output both
+```
+
+### Engagement Metrics
+Fetch post-level stats over a specified timeframe or post count:
+```bash
+social-analytics engagement cristiano --date-range 90d --post-limit 12
+```
+
+### Generate Individual Dashboards
+Generate specific charts with optional image export (`--png-output`) and representation mode (`--output png|spec|both`):
+
+```bash
+# 1. Top Posts by Engagement (Bar chart with caption previews)
+social-analytics dashboard cristiano top_posts_by_engagement --top-n 5 --output both --png-output cristiano_top_posts_by_engagement.png
+
+# 2. Engagement Rate Over Time (Line chart)
+social-analytics dashboard cristiano engagement_rate_over_time --output png --png-output cristiano_engagement_rate_over_time.png
+
+# 3. Content Type Breakdown (Reels vs Images vs Carousels)
+social-analytics dashboard cristiano content_type_comparison --output both
+```
+
+
+---
+
+## Connecting to an MCP Client
+
+### Stdio Transport (Claude Desktop / Cursor / Antigravity)
+
+Add the server to your MCP client configuration (e.g., `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "social-analytics-mcp": {
+      "command": "/absolute/path/to/social-analytics-mcp/.venv/bin/python",
+      "args": ["-m", "social_analytics_mcp"],
+      "cwd": "/absolute/path/to/social-analytics-mcp",
+      "env": {
+        "APIFY_API_TOKEN": "your_apify_token_here",
+        "GEMINI_API_KEY": "your_gemini_api_key_here"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Google Cloud Run Deployment
+
+The server is fully containerized and deployable to Google Cloud Run. It exposes:
+- `/` — Interactive web status dashboard and tool directory.
+- `/mcp` — Server-Sent Events (SSE) streamable HTTP transport for remote MCP clients.
+- `/stats` — Real-time telemetry (invocations, unique callers, tool breakdown, latency).
+- `/health` — Operational uptime check.
+
+### Deploy with the Included Script:
+
+```bash
+APIFY_API_TOKEN='your-token' ./scripts/deploy_cloud_run.sh YOUR_PROJECT_ID us-central1
+```
+
+The script manages Google Secret Manager, configures IAM roles, and provisions Cloud Run with 2 CPU / 2Gi RAM for Kaleido image rendering.
+
+---
+
+## License
+
+MIT License. Developed for automated social intelligence and AI influencer workflows.

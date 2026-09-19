@@ -292,6 +292,45 @@ async def generate_dashboard(
 
 
 @mcp.tool()
+async def audit_profile(
+    username: str,
+    date_range: str | None = None,
+    post_limit: int = 12,
+    top_n: int = 5,
+    ctx: Context | None = None,
+    output: str = "png",
+) -> dict:
+    """Run a full, single-call performance audit for an Instagram profile.
+
+    Combines:
+    1. Public profile stats and authority ratio.
+    2. Ranked top posts bar chart with caption snippet labels.
+    3. 90-day / chronological engagement rate trajectory line chart.
+    4. Content-type breakdown (Reels vs Carousels vs Photos) comparison chart.
+    5. Formatted Markdown tables for posts and format distributions.
+    6. Actionable AI key takeaways and tactical recommendations.
+
+    output: 'png' for base64 images, 'spec' for interactive Plotly JSON specs, or 'both'.
+    """
+    start = time.monotonic()
+    client_id = getattr(ctx, "client_id", None) if ctx else None
+    result = await asyncio.to_thread(
+        tools.audit_profile, username, date_range, post_limit, top_n, output
+    )
+    duration_ms = (time.monotonic() - start) * 1000
+    tracker.record_call(
+        "audit_profile",
+        {"username": username, "date_range": date_range, "post_limit": post_limit, "top_n": top_n},
+        bool(result.get("ok")),
+        duration_ms,
+        client_id=client_id,
+        error_message=result.get("error", {}).get("message"),
+    )
+    return result
+
+
+
+@mcp.tool()
 def list_available_metrics(ctx: Context | None = None) -> dict:
     """List supported Instagram dashboard metrics, chart types, and data limits."""
     start = time.monotonic()

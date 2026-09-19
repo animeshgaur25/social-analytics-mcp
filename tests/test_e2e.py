@@ -16,7 +16,8 @@ from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-USERNAME = "eminem"
+# Public Cristiano Ronaldo Instagram account used for the opt-in live example.
+USERNAME = "cristiano"
 CHART_REQUESTS = (
     ("engagement_rate_over_time", "line"),
     ("top_posts_by_engagement", "bar"),
@@ -83,11 +84,31 @@ async def run_live_smoke_test() -> None:
                         )
                     ),
                 )
-                png_path = Path(f"eminem_{metric}.png")
-                spec_path = Path(f"eminem_{metric}.plotly.json")
+                png_path = Path(f"{USERNAME}_{metric}.png")
+                spec_path = Path(f"{USERNAME}_{metric}.plotly.json")
                 png_path.write_bytes(base64.b64decode(dashboard["image_png_base64"]))
                 spec_path.write_text(json.dumps(dashboard["interactive_chart_spec"], indent=2))
                 print(f"✓ Wrote {png_path.resolve()} and {spec_path.resolve()}")
+
+            # Test single-call audit_profile
+            audit = require_ok(
+                "audit_profile",
+                as_dict(
+                    await session.call_tool(
+                        "audit_profile",
+                        {
+                            "username": USERNAME,
+                            "post_limit": 12,
+                            "top_n": 5,
+                            "output": "spec",
+                        },
+                    )
+                ),
+            )
+            assert len(audit["dashboards"]) == 3
+            assert "audit_markdown_report" in audit
+            print("✓ audit_profile returned all 3 views and consolidated markdown report")
+
 
 
 def main() -> None:

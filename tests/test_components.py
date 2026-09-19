@@ -70,8 +70,24 @@ def main() -> None:
     assert engagement["ok"], engagement
     assert engagement["posts_returned"] == 3, engagement
     assert all("engagement_rate" in post for post in engagement["posts"])
+
+    # Verify single-call audit_profile
+    audit = tools.audit_profile("eminem", post_limit=5, top_n=3, output="spec")
+    assert audit["ok"], audit
+    assert "top_posts_by_engagement" in audit["dashboards"]
+    assert "engagement_rate_over_time" in audit["dashboards"]
+    assert "content_type_comparison" in audit["dashboards"]
+    assert "audit_markdown_report" in audit
+    assert len(audit["insights"]) > 0
+
+    # Verify metric="all" delegates to audit
+    all_dash = tools.generate_dashboard("eminem", metric="all", top_n=3, output="spec")
+    assert all_dash["ok"], all_dash
+    assert "dashboards" in all_dash
+
     verify_plotly_charts(fixture)
     print("Offline component tests passed.")
+
 
 
 def verify_plotly_charts(fixture: dict) -> None:

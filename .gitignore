@@ -3,7 +3,12 @@
 *.egg-info/
 __pycache__/
 *.py[cod]
-eminem_*.png
-eminem_*.plotly.json
+cristiano_*.png
+cristiano_*.plotly.json
+eminem*.png
+eminem*.plotly.json
+*.png
+*.plotly.json
 .gcloudignore
 .DS_Store
+

@@ -103,6 +103,15 @@ class SocialAnalyticsTools:
         top_n: int = 5,
         output: str = "png",
     ) -> dict[str, Any]:
+        if metric.strip().lower() == "all":
+            return self.audit_profile(
+                username=username,
+                date_range=date_range,
+                post_limit=12,
+                top_n=top_n,
+                output=output,
+            )
+
         try:
             profile, cache_hit = self._profile(username)
             posts, applied_range = select_posts(profile["posts"], date_range, post_limit=12)
@@ -143,6 +152,114 @@ class SocialAnalyticsTools:
             }
         except SocialAnalyticsError as exc:
             return self._error(exc)
+
+    def audit_profile(
+        self,
+        username: str,
+        date_range: str | None = None,
+        post_limit: int = 12,
+        top_n: int = 5,
+        output: str = "png",
+    ) -> dict[str, Any]:
+        """Perform a comprehensive account audit returning all 3 dashboard views, tables, and insights in one call."""
+        try:
+            profile, cache_hit = self._profile(username)
+            posts, applied_range = select_posts(profile["posts"], date_range, post_limit=post_limit)
+            following = profile.get("following") or 0
+            ratio = (profile["followers"] / following) if following else profile["followers"]
+
+            # 1. Top Posts by Engagement
+            ranked_posts = sorted(posts, key=lambda p: int(p.get("engagement", 0)), reverse=True)
+            top_posts_chart = self._chart_generator.generate(
+                username=profile["username"],
+                metric="top_posts_by_engagement",
+                posts=posts,
+                follower_history=self._follower_history.get(profile["username"]),
+                chart_type="bar",
+                top_n=top_n,
+                output=output,
+            )
+            top_posts_table_md, _ = build_posts_table(ranked_posts, limit=top_n)
+
+            # 2. Engagement Rate Over Time
+            trajectory_chart = self._chart_generator.generate(
+                username=profile["username"],
+                metric="engagement_rate_over_time",
+                posts=posts,
+                follower_history=self._follower_history.get(profile["username"]),
+                chart_type="line",
+                top_n=top_n,
+                output=output,
+            )
+
+            # 3. Content Type Comparison
+            content_type_chart = self._chart_generator.generate(
+                username=profile["username"],
+                metric="content_type_comparison",
+                posts=posts,
+                follower_history=self._follower_history.get(profile["username"]),
+                chart_type="bar",
+                top_n=top_n,
+                output=output,
+            )
+            content_type_table_md, _ = build_content_type_table(posts)
+
+            # Comprehensive Insights & Recommendations
+            insights = generate_post_insights(
+                profile["username"], posts, profile["followers"]
+            )
+
+            report_lines = [
+                f"# Performance Audit: @{profile['username']} ({profile['full_name']})",
+                f"**Followers:** {profile['followers']:,} | **Following:** {profile['following']:,} ({ratio:.1f}x authority ratio) | **Posts:** {profile['post_count']:,} | **Verified:** {'Yes' if profile['verified'] else 'No'}",
+                "",
+                "## 1. Top Posts by Engagement",
+                top_posts_table_md,
+                "",
+                "## 2. Content-Type Breakdown",
+                content_type_table_md,
+                "",
+                "## 3. Key Takeaways",
+                *[f"- {t}" for t in insights["key_takeaways"]],
+                "",
+                "## 4. Strategic Recommendations",
+                *[f"- {r}" for r in insights["recommendations"]],
+            ]
+            audit_markdown_report = "\n".join(report_lines)
+
+            return {
+                "ok": True,
+                "source": {"provider": "Apify", "actor": "apify/instagram-profile-scraper", "cache_hit": cache_hit},
+                "username": profile["username"],
+                "profile": {
+                    "username": profile["username"],
+                    "full_name": profile["full_name"],
+                    "followers": profile["followers"],
+                    "following": profile["following"],
+                    "post_count": profile["post_count"],
+                    "verified": profile["verified"],
+                    "bio": profile["bio"],
+                    "authority_ratio": f"{ratio:.1f}x",
+                },
+                "date_range_applied": applied_range,
+                "posts_analyzed": len(posts),
+                "dashboards": {
+                    "top_posts_by_engagement": top_posts_chart,
+                    "engagement_rate_over_time": trajectory_chart,
+                    "content_type_comparison": content_type_chart,
+                },
+                "tables": {
+                    "top_posts_markdown": top_posts_table_md,
+                    "content_type_markdown": content_type_table_md,
+                },
+                "audit_markdown_report": audit_markdown_report,
+                "insights": insights["key_takeaways"],
+                "recommendations": insights["recommendations"],
+                "benchmark": insights["benchmark"],
+            }
+        except SocialAnalyticsError as exc:
+            return self._error(exc)
+
 
     @staticmethod
     def list_available_metrics() -> dict[str, Any]:
