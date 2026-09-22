@@ -3,3 +3,4 @@ apify-client>=2.5,<3
 plotly>=6.1,<7
 kaleido>=1.0,<2
 python-dotenv>=1.0,<2
+vaderSentiment>=3.3,<4

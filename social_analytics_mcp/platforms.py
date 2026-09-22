@@ -14,6 +14,7 @@ class PlatformSpec:
     id: str
     label: str
     default_actor: str
+    default_comment_actor: str
     account_noun: str
     item_noun: str
     item_noun_plural: str
@@ -29,6 +30,7 @@ INSTAGRAM = PlatformSpec(
     id="instagram",
     label="Instagram",
     default_actor="apify/instagram-profile-scraper",
+    default_comment_actor="apify/instagram-comment-scraper",
     account_noun="profile",
     item_noun="post",
     item_noun_plural="posts",
@@ -44,6 +46,7 @@ YOUTUBE = PlatformSpec(
     id="youtube",
     label="YouTube",
     default_actor="streamers/youtube-scraper",
+    default_comment_actor="streamers/youtube-comments-scraper",
     account_noun="channel",
     item_noun="video",
     item_noun_plural="videos",

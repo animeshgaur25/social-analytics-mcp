@@ -5,14 +5,20 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .apify import ApifyInstagramFetcher, ApifyYouTubeFetcher
+from .apify import (
+    ApifyInstagramCommentFetcher,
+    ApifyInstagramFetcher,
+    ApifyYouTubeCommentFetcher,
+    ApifyYouTubeFetcher,
+)
 from .cache import FollowerHistory, SessionProfileCache
 from .charts import ChartGenerator, DEFAULT_CHART_TYPES, SUPPORTED_CHART_TYPES, SUPPORTED_METRICS
-from .errors import SocialAnalyticsError
+from .errors import InvalidRequestError, SocialAnalyticsError
 from .insights import build_content_type_table, build_posts_table, generate_post_insights
 from .metrics import (
     average_engagement_rate,
     normalize_channel_handle,
+    normalize_comment,
     normalize_profile,
     normalize_username,
     normalize_youtube_channel,
@@ -20,6 +26,16 @@ from .metrics import (
     youtube_channel_url,
 )
 from .platforms import PlatformSpec, SUPPORTED_PLATFORMS, resolve_platform
+from .sentiment import (
+    build_caveats,
+    build_comment_table,
+    build_distribution_table,
+    build_per_item_table,
+    extremes,
+    generate_sentiment_insights,
+    score_comments,
+    summarize,
+)
 
 
 class SocialAnalyticsTools:
@@ -30,12 +46,16 @@ class SocialAnalyticsTools:
         *,
         fetcher: ApifyInstagramFetcher | None = None,
         youtube_fetcher: ApifyYouTubeFetcher | None = None,
+        comment_fetcher: ApifyInstagramCommentFetcher | None = None,
+        youtube_comment_fetcher: ApifyYouTubeCommentFetcher | None = None,
         cache: SessionProfileCache | None = None,
         follower_history: FollowerHistory | None = None,
         chart_generator: ChartGenerator | None = None,
     ) -> None:
         self._fetcher = fetcher or ApifyInstagramFetcher()
         self._youtube_fetcher = youtube_fetcher or ApifyYouTubeFetcher()
+        self._comment_fetcher = comment_fetcher or ApifyInstagramCommentFetcher()
+        self._youtube_comment_fetcher = youtube_comment_fetcher or ApifyYouTubeCommentFetcher()
         self._cache = cache or SessionProfileCache(
             ttl_seconds=int(os.getenv("PROFILE_CACHE_TTL_SECONDS", "900"))
         )
@@ -337,6 +357,139 @@ class SocialAnalyticsTools:
                 "recommendations": insights["recommendations"],
                 "benchmark": insights["benchmark"],
             }
+        except SocialAnalyticsError as exc:
+            return self._error(exc)
+
+    def analyze_sentiment(
+        self,
+        username: str,
+        platform: str = "instagram",
+        post_limit: int = 5,
+        comments_per_post: int = 30,
+        date_range: str | None = None,
+        output: str = "none",
+        include_comments: bool = False,
+    ) -> dict[str, Any]:
+        """Score audience comments on the most recent items and aggregate the reception."""
+        try:
+            spec = resolve_platform(platform)
+            if post_limit < 1:
+                raise InvalidRequestError("post_limit must be at least 1.")
+            if comments_per_post < 1:
+                raise InvalidRequestError("comments_per_post must be at least 1.")
+
+            profile, cache_hit, actor_id = self._profile(username, spec)
+            posts, applied_range = select_posts(profile["posts"], date_range, post_limit)
+            if not posts:
+                return self._error_message(
+                    f"No {spec.item_noun_plural} matched the requested date range, so there are "
+                    "no comment threads to analyse."
+                )
+
+            item_urls = [post["url"] for post in posts if post.get("url")]
+            if not item_urls:
+                return self._error_message(
+                    f"The selected {spec.item_noun_plural} have no public URLs to read comments from."
+                )
+
+            comment_fetcher = (
+                self._youtube_comment_fetcher if spec.id == "youtube" else self._comment_fetcher
+            )
+            cache_key = f"{spec.id}:comments:{comments_per_post}:" + ",".join(sorted(item_urls))
+            cached = self._cache.get(cache_key)
+            if cached:
+                raw_comments, comments_cache_hit = cached.value["items"], True
+            else:
+                raw_comments = comment_fetcher.fetch_comments(item_urls, comments_per_post)
+                self._cache.put(cache_key, {"items": raw_comments})
+                comments_cache_hit = False
+
+            normalized = [normalize_comment(raw, spec.id) for raw in raw_comments]
+            # The creator's own replies would otherwise be counted as audience reaction.
+            owner_handles = {profile["username"].lower()}
+            audience = [
+                comment
+                for comment in normalized
+                if comment["text"].strip()
+                and not comment["is_owner"]
+                and comment["author"].lower() not in owner_handles
+            ]
+            if not audience:
+                return self._error_message(
+                    f"No audience comments were returned for the latest {len(posts)} "
+                    f"{spec.item_noun_plural}. The {spec.item_noun_plural} may have comments disabled."
+                )
+
+            scored = score_comments(audience)
+            summary = summarize(scored)
+            highlights = extremes(scored)
+
+            by_url: dict[str, list[dict[str, Any]]] = {}
+            for comment in scored:
+                by_url.setdefault(comment["item_url"], []).append(comment)
+            per_item = []
+            for post in posts:
+                bucket = by_url.get(post.get("url", ""), [])
+                if not bucket:
+                    continue
+                item_summary = summarize(bucket)
+                per_item.append(
+                    {
+                        "url": post.get("url", ""),
+                        "caption": post.get("caption", ""),
+                        "media_type": post.get("media_type", ""),
+                        **item_summary,
+                    }
+                )
+            per_item.sort(key=lambda row: row["net_sentiment_score"], reverse=True)
+
+            insights = generate_sentiment_insights(
+                profile["username"], summary, highlights, per_item, spec.item_noun
+            )
+
+            most_liked = sorted(scored, key=lambda c: int(c.get("likes") or 0), reverse=True)
+            result: dict[str, Any] = {
+                "ok": True,
+                "source": {
+                    "provider": "Apify",
+                    "platform": spec.id,
+                    "actor": actor_id,
+                    "comment_actor": comment_fetcher.actor_id,
+                    "cache_hit": cache_hit,
+                    "comments_cache_hit": comments_cache_hit,
+                },
+                "platform": spec.id,
+                "username": profile["username"],
+                "engine": "vaderSentiment with an emoji and social-slang lexicon overlay",
+                "date_range_applied": applied_range,
+                f"{spec.item_noun_plural}_analyzed": len(per_item),
+                "comments_fetched": len(normalized),
+                "comments_analyzed": summary["comments_analyzed"],
+                "comments_excluded_as_owner": sum(1 for c in normalized if c["is_owner"]),
+                **{k: v for k, v in summary.items() if k != "comments_analyzed"},
+                "markdown_table": build_distribution_table(summary),
+                f"per_{spec.item_noun}_markdown": build_per_item_table(per_item, spec.caption_noun),
+                "top_comments_markdown": build_comment_table(most_liked, limit=10),
+                f"per_{spec.item_noun}_breakdown": per_item,
+                "most_positive_comments": highlights["most_positive"],
+                "most_negative_comments": highlights["most_negative"],
+                "insights": insights["key_takeaways"],
+                "recommendations": insights["recommendations"],
+                "verdict": insights["verdict"],
+                "caveats": build_caveats(scored),
+            }
+            if include_comments:
+                result["comments"] = scored
+            if output in ("png", "spec", "both"):
+                result.update(
+                    self._chart_generator.generate_sentiment_chart(
+                        username=profile["username"],
+                        summary=summary,
+                        output=output,
+                        platform=spec.id,
+                    )
+                )
+            return result
         except SocialAnalyticsError as exc:
             return self._error(exc)
 

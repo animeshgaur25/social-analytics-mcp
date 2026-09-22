@@ -140,6 +140,101 @@ class ChartGenerator:
 
         return result
     
+    def generate_sentiment_chart(
+        self,
+        *,
+        username: str,
+        summary: dict[str, Any],
+        output: str = "png",
+        platform: str = "instagram",
+    ) -> dict[str, Any]:
+        """Render the positive/neutral/negative split as its own chart.
+
+        Sentiment does not flow through build_figure because its input is an
+        aggregate summary rather than a list of posts.
+        """
+        spec = resolve_platform(platform)
+        go = self._plotly()
+        counts = summary["distribution"]
+        percents = summary["distribution_percent"]
+        labels = ["Positive", "Neutral", "Negative"]
+        keys = ["positive", "neutral", "negative"]
+        values = [percents[key] for key in keys]
+        colors = ["#10b981", "#94a3b8", "#ef4444"]
+        hover = [
+            f"<b>{label}</b><br>Comments: {counts[key]:,}<br>Share: <b>{percents[key]}%</b>"
+            for label, key in zip(labels, keys)
+        ]
+
+        figure = go.Figure(
+            go.Bar(
+                x=labels,
+                y=values,
+                marker=dict(color=colors, cornerradius=8),
+                text=[f"{value}%" for value in values],
+                textposition="outside",
+                textfont=dict(size=12, color="#475569", family=FONT_FAMILY),
+                customdata=hover,
+                hovertemplate="%{customdata}<extra></extra>",
+            )
+        )
+        figure.update_layout(
+            template="plotly_white",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            font={"family": FONT_FAMILY, "color": "#0f172a"},
+            margin={"l": 64, "r": 36, "t": 88, "b": 70},
+            hovermode="closest",
+            hoverlabel={
+                "bgcolor": "#0f172a",
+                "font_size": 13,
+                "font_family": FONT_FAMILY,
+                "font_color": "#ffffff",
+                "bordercolor": "#334155",
+            },
+            width=1100,
+            height=620,
+            title=dict(
+                text=(
+                    f"<b>@{username}</b> · Audience Sentiment<br>"
+                    f"<span style='font-size:12px;color:#64748b;'>"
+                    f"{summary['comments_analyzed']:,} comments across recent {spec.item_noun_plural} · "
+                    f"net sentiment {summary['net_sentiment_score']:+.1f}</span>"
+                ),
+                font=dict(size=18, color="#0f172a"),
+            ),
+        )
+        figure.update_xaxes(
+            showgrid=False,
+            linecolor="#cbd5e1",
+            linewidth=1.2,
+            tickfont={"size": 11, "family": FONT_FAMILY, "color": "#475569"},
+            title="Sentiment",
+        )
+        figure.update_yaxes(
+            gridcolor="#f1f5f9",
+            gridwidth=1,
+            zerolinecolor="#e2e8f0",
+            tickfont={"size": 11, "family": FONT_FAMILY, "color": "#475569"},
+            title="Share of comments (%)",
+            ticksuffix="%",
+        )
+
+        result: dict[str, Any] = {"metric": "sentiment_distribution", "chart_type": "bar"}
+        if output in ("png", "both"):
+            try:
+                png = figure.to_image(format="png", width=800, height=500, scale=1)
+            except Exception as exc:
+                raise ChartRenderingError(
+                    "The interactive chart was created, but PNG export could not start a compatible browser. "
+                    "Install the project's Plotly and Kaleido dependencies and run 'plotly_get_chrome' if needed, then retry."
+                ) from exc
+            result["image_mime_type"] = "image/png"
+            result["image_png_base64"] = base64.b64encode(png).decode("ascii")
+        if output in ("spec", "both"):
+            result["interactive_chart_spec"] = json.loads(figure.to_json())
+        return result
+
     @staticmethod
     def _plotly() -> Any:
         try:

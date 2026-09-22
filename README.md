@@ -31,6 +31,7 @@ YouTube engagement rate is measured against **views** rather than subscribers, w
 | `get_profile_summary` | `username`, `platform` | Returns audience, following, and item counts, verification status, authority/lifetime-views analysis, and a structured Markdown summary table. |
 | `get_engagement_metrics` | `username`, `date_range`, `post_limit`, `platform` | Returns item-level metrics (likes, comments, views on YouTube, media type, engagement rate), a sorted Markdown table, and content-type breakdowns. |
 | `generate_dashboard` | `username`, `metric`, `chart_type`, `date_range`, `top_n`, `output`, `platform` | Generates a styled light-theme dashboard. Supports `output="png"`, `"spec"` (Plotly JSON), or `"both"`. Use `metric="all"` to trigger the full audit. |
+| `analyze_sentiment` | `username`, `platform`, `post_limit`, `comments_per_post`, `date_range`, `output`, `include_comments` | Scores **audience comments** on recent items: positive/neutral/negative split, net sentiment, per-item breakdown, most positive and negative comments, and an optional distribution chart. Scraping comments costs **extra Apify credits** — see below. |
 | `list_available_metrics` | `platform` | Lists supported metrics (`engagement_rate_over_time`, `top_posts_by_engagement`, `content_type_comparison`, `follower_growth`, `all`), default chart types, and operational bounds for that platform. |
 
 ### Dashboard Metrics & Outputs
@@ -245,6 +246,36 @@ From an MCP client, the same thing is a `platform` argument:
 ```json
 { "name": "audit_profile", "arguments": { "username": "@MrBeast", "platform": "youtube" } }
 ```
+
+---
+
+## Audience Sentiment
+
+`analyze_sentiment` scrapes the actual comment threads on an account's most recent items and scores them locally.
+
+```bash
+social-analytics sentiment cristiano --post-limit 3 --comments-per-post 30
+social-analytics sentiment @MrBeast --platform youtube --post-limit 3 --output png
+```
+
+*Sample output:*
+
+```text
+| Sentiment | Comments | Share |
+|---|---|---|
+| Positive | 17 | 60.7% |
+| Neutral | 9 | 32.1% |
+| Negative | 2 | 7.1% |
+```
+
+**Cost.** This is the only tool that runs a *second* Apify actor (`apify/instagram-comment-scraper` or `streamers/youtube-comments-scraper`), so it costs extra credits on top of the profile fetch. Spend is bounded by `post_limit × comments_per_post`; both default conservatively (5 × 30). Comment payloads are cached per session, so repeat calls with the same arguments are free.
+
+**How scoring works.** Comments are scored locally with VADER — nothing is sent to a third-party model. Stock VADER is unusable on social text: it maps 🔥 to the word "fire" and scores it **−1.4 (negative)**, while ❤️, 💯, and 🐐 resolve to multi-word descriptions absent from its lexicon and land on neutral. Since those are the most common forms of praise in comments, the defaults invert the result. `sentiment.py` therefore substitutes known emoji with controlled tokens before scoring and overlays social slang (`goat`, `banger`, `mid`, `cringe`, `w`), so VADER's negation and intensifier handling still applies.
+
+**Known limits**, returned in the response's `caveats` field rather than buried here:
+- **English-only.** Non-Latin-script comments score neutral regardless of content. The response counts them and warns when they are a meaningful share, because that inflates the neutral bucket and understates sentiment for multilingual audiences.
+- **No sarcasm detection.** A lexicon cannot catch it.
+- The creator's own replies are excluded (`authorIsChannelOwner` on YouTube, handle match on both), so the result measures audience reaction rather than the creator's own pinned comment.
 
 ---
 

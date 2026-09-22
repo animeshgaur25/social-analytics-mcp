@@ -175,3 +175,55 @@ class ApifyYouTubeFetcher(_ApifyRunner):
                 "Check the handle or confirm that the channel has public videos."
             )
         return items
+
+
+class ApifyInstagramCommentFetcher(_ApifyRunner):
+    """Reads public comments for a set of Instagram post URLs."""
+
+    service_label = "Instagram comment"
+
+    def __init__(self, *args: Any, actor_id: str | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._actor_id = actor_id or os.getenv(
+            "APIFY_INSTAGRAM_COMMENT_ACTOR_ID", INSTAGRAM.default_comment_actor
+        )
+
+    @property
+    def actor_id(self) -> str:
+        return self._actor_id
+
+    def fetch_comments(self, item_urls: list[str], limit_per_item: int) -> list[dict[str, Any]]:
+        if not item_urls:
+            return []
+        run_input = {
+            "directUrls": item_urls,
+            "resultsLimit": limit_per_item,
+            "includeNestedComments": False,
+        }
+        return [item for item in self._run_actor(self._actor_id, run_input) if isinstance(item, dict)]
+
+
+class ApifyYouTubeCommentFetcher(_ApifyRunner):
+    """Reads public comments for a set of YouTube video URLs."""
+
+    service_label = "YouTube comment"
+
+    def __init__(self, *args: Any, actor_id: str | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._actor_id = actor_id or os.getenv(
+            "APIFY_YOUTUBE_COMMENT_ACTOR_ID", YOUTUBE.default_comment_actor
+        )
+
+    @property
+    def actor_id(self) -> str:
+        return self._actor_id
+
+    def fetch_comments(self, item_urls: list[str], limit_per_item: int) -> list[dict[str, Any]]:
+        if not item_urls:
+            return []
+        run_input = {
+            "startUrls": [{"url": url} for url in item_urls],
+            "maxComments": limit_per_item,
+            "sortCommentsBy": "NEWEST_FIRST",
+        }
+        return [item for item in self._run_actor(self._actor_id, run_input) if isinstance(item, dict)]

@@ -62,6 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_platform(audit)
 
+    sentiment = commands.add_parser(
+        "sentiment", help="Call analyze_sentiment (scrapes comments; costs extra Apify credits)"
+    )
+    sentiment.add_argument("username")
+    sentiment.add_argument("--post-limit", type=int, default=5)
+    sentiment.add_argument("--comments-per-post", type=int, default=30)
+    sentiment.add_argument("--date-range", default=None)
+    sentiment.add_argument("--output", choices=("none", "png", "spec", "both"), default="none")
+    sentiment.add_argument("--include-comments", action="store_true")
+    _add_platform(sentiment)
+
     metrics = commands.add_parser("metrics", help="Call list_available_metrics")
     _add_platform(metrics)
     return parser
@@ -102,6 +113,20 @@ def main() -> None:
             for dash_name, dash_data in result.get("dashboards", {}).items():
                 if isinstance(dash_data, dict) and "image_png_base64" in dash_data:
                     dash_data["image_png_base64_length"] = len(dash_data.pop("image_png_base64"))
+    elif args.command == "sentiment":
+        result = toolset.analyze_sentiment(
+            args.username,
+            args.platform,
+            args.post_limit,
+            args.comments_per_post,
+            args.date_range,
+            args.output,
+            args.include_comments,
+        )
+        if result.get("ok"):
+            image = result.pop("image_png_base64", "")
+            if image:
+                result["image_png_base64_length"] = len(image)
     else:
         result = toolset.list_available_metrics(args.platform)
     print(json.dumps(result, indent=2, default=str))

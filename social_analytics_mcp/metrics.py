@@ -134,6 +134,39 @@ def normalize_youtube_video(raw: dict[str, Any], subscribers: int) -> dict[str, 
     }
 
 
+def normalize_comment(raw: dict[str, Any], platform: str) -> dict[str, Any]:
+    """Map either comment actor's output into one shape.
+
+    The two actors disagree on every field name: Instagram uses text/ownerUsername/
+    likesCount with an ISO timestamp, while YouTube uses comment/author/voteCount and
+    reports only a relative string such as "2 days ago", which cannot be placed on a
+    timeline and is therefore preserved verbatim instead of parsed.
+    """
+    if platform == "youtube":
+        return {
+            "id": str(raw.get("cid") or ""),
+            "text": str(raw.get("comment") or ""),
+            "author": str(raw.get("author") or "").lstrip("@"),
+            "likes": _nonnegative_int(raw.get("voteCount")),
+            "replies": _nonnegative_int(raw.get("replyCount")),
+            "timestamp": None,
+            "published_text": str(raw.get("publishedTimeText") or ""),
+            "item_url": str(raw.get("pageUrl") or ""),
+            "is_owner": bool(raw.get("authorIsChannelOwner")),
+        }
+    return {
+        "id": str(raw.get("id") or ""),
+        "text": str(raw.get("text") or ""),
+        "author": str(raw.get("ownerUsername") or "").lstrip("@"),
+        "likes": _nonnegative_int(raw.get("likesCount")),
+        "replies": _nonnegative_int(raw.get("repliesCount")),
+        "timestamp": _iso_timestamp(raw.get("timestamp")),
+        "published_text": "",
+        "item_url": str(raw.get("postUrl") or ""),
+        "is_owner": False,
+    }
+
+
 def youtube_media_type(video: dict[str, Any]) -> str:
     raw_type = str(video.get("type") or "").lower()
     url = str(video.get("url") or "").lower()

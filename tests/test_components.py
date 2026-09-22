@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from social_analytics_mcp.apify import ApifyInstagramFetcher, ApifyYouTubeFetcher
+from social_analytics_mcp.apify import (
+    ApifyInstagramFetcher,
+    ApifyYouTubeCommentFetcher,
+    ApifyYouTubeFetcher,
+)
 from social_analytics_mcp.charts import ChartGenerator
 from social_analytics_mcp.metrics import normalize_channel_handle, normalize_profile
 from social_analytics_mcp.tools import SocialAnalyticsTools
@@ -120,6 +124,29 @@ class FakeYouTubeDataset:
         yield from self.items
 
 
+class FakeCommentActor:
+    def start(self, *, run_input: dict) -> dict:
+        assert run_input["startUrls"], run_input
+        assert run_input["maxComments"] >= 1
+        return {"id": "run-1"}
+
+
+class FakeCommentClient:
+    def __init__(self, items: list[dict]) -> None:
+        self.run_client = FakeRun()
+        self.items = items
+
+    def actor(self, actor_id: str) -> FakeCommentActor:
+        assert actor_id == "streamers/youtube-comments-scraper"
+        return FakeCommentActor()
+
+    def run(self, run_id: str) -> FakeRun:
+        return self.run_client
+
+    def dataset(self, dataset_id: str) -> FakeYouTubeDataset:
+        return FakeYouTubeDataset(self.items)
+
+
 class FakeYouTubeClient:
     def __init__(self, items: list[dict]) -> None:
         self.run_client = FakeRun()
@@ -171,7 +198,111 @@ def main() -> None:
 
     verify_plotly_charts(fixture)
     verify_youtube()
+    verify_sentiment_scoring()
+    verify_sentiment_tool()
     print("Offline component tests passed.")
+
+
+def verify_sentiment_scoring() -> None:
+    """Guard the lexicon overlay: stock VADER gets these social cases wrong."""
+    from social_analytics_mcp.sentiment import classify, score_text, summarize
+
+    # Stock VADER scores the fire emoji -1.4 via the word "fire"; praise must win.
+    assert score_text("🔥🔥🔥")["label"] == "positive", score_text("🔥🔥🔥")
+    assert score_text("❤️")["label"] == "positive"
+    assert score_text("💯")["label"] == "positive"
+    assert score_text("GOAT 🐐")["label"] == "positive"
+    assert score_text("absolute banger")["label"] == "positive"
+    assert score_text("trash")["label"] == "negative"
+    assert score_text("mid tbh")["label"] == "negative"
+    assert score_text("clickbait 🙄")["label"] == "negative"
+    assert score_text("💩")["label"] == "negative"
+    # Negation still works through the overlay.
+    assert score_text("not bad")["label"] == "positive"
+    assert score_text("this is not good")["label"] == "negative"
+    # Empty and whitespace-only text must not blow up.
+    assert score_text("")["label"] == "neutral"
+    assert score_text("   ")["label"] == "neutral"
+    assert classify(0.0) == "neutral"
+
+    empty = summarize([])
+    assert empty["comments_analyzed"] == 0 and empty["net_sentiment_score"] == 0.0
+
+    from social_analytics_mcp.sentiment import build_caveats, looks_non_latin
+
+    assert looks_non_latin("نگفتی ازشامپوکلیرراضی هستی") is True
+    assert looks_non_latin("great video") is False
+    # Emoji-only comments score correctly, so they must not be flagged as a language gap.
+    assert looks_non_latin("🔥🔥🔥") is False
+    caveats = build_caveats([{"text": "سلام"}, {"text": "nice"}])
+    assert any("non-Latin" in c for c in caveats), caveats
+    print("Sentiment scoring overlay: passed")
+
+
+def verify_sentiment_tool() -> None:
+    """Run analyze_sentiment end to end against faked profile and comment actors."""
+    from social_analytics_mcp.metrics import normalize_comment
+
+    # Field names differ entirely between the two comment actors.
+    ig = normalize_comment(
+        {"id": "1", "text": "love this", "ownerUsername": "fan", "likesCount": 4,
+         "timestamp": "2026-05-18T12:03:34.000Z", "postUrl": "https://p/1"},
+        "instagram",
+    )
+    assert ig["text"] == "love this" and ig["likes"] == 4 and ig["author"] == "fan"
+    assert ig["timestamp"] is not None and ig["is_owner"] is False
+
+    yt = normalize_comment(
+        {"cid": "c1", "comment": "great video", "author": "@viewer", "voteCount": 9,
+         "publishedTimeText": "2 days ago", "pageUrl": "https://v/1", "authorIsChannelOwner": True},
+        "youtube",
+    )
+    assert yt["text"] == "great video" and yt["likes"] == 9 and yt["author"] == "viewer"
+    # A relative date cannot be placed on a timeline, so it is preserved verbatim.
+    assert yt["timestamp"] is None and yt["published_text"] == "2 days ago"
+    assert yt["is_owner"] is True
+
+    video_url = YOUTUBE_ITEMS[0]["url"]
+    comments = [
+        {"cid": "own", "comment": "Pinned by me, thanks all!", "author": "@creatorlabs",
+         "voteCount": 9999, "pageUrl": video_url, "authorIsChannelOwner": True},
+        {"cid": "c1", "comment": "🔥🔥🔥", "author": "@a", "voteCount": 50, "pageUrl": video_url},
+        {"cid": "c2", "comment": "absolute banger, love the edit", "author": "@b", "voteCount": 30, "pageUrl": video_url},
+        {"cid": "c3", "comment": "this was mid, clickbait title", "author": "@c", "voteCount": 5, "pageUrl": video_url},
+        {"cid": "c4", "comment": "first", "author": "@d", "voteCount": 1, "pageUrl": video_url},
+    ]
+
+    tools = SocialAnalyticsTools(
+        youtube_fetcher=ApifyYouTubeFetcher(
+            client=FakeYouTubeClient(YOUTUBE_ITEMS), poll_interval_seconds=0.001, timeout_seconds=1
+        ),
+        youtube_comment_fetcher=ApifyYouTubeCommentFetcher(
+            client=FakeCommentClient(comments), poll_interval_seconds=0.001, timeout_seconds=1
+        ),
+    )
+
+    result = tools.analyze_sentiment("@creatorlabs", platform="youtube", post_limit=1, comments_per_post=10)
+    assert result["ok"], result
+    # The pinned owner comment must not count as audience reaction.
+    assert result["comments_fetched"] == 5, result["comments_fetched"]
+    assert result["comments_analyzed"] == 4, result
+    assert result["comments_excluded_as_owner"] == 1, result
+    assert result["distribution"]["positive"] == 2, result["distribution"]
+    assert result["distribution"]["negative"] == 1, result["distribution"]
+    assert result["net_sentiment_score"] == 25.0, result["net_sentiment_score"]
+    assert result["overall_label"] == "positive"
+    assert result["most_positive_comments"], result
+    assert "Sentiment" in result["markdown_table"]
+    assert result["per_video_breakdown"], result
+    assert any("English-only" in c for c in result["caveats"]), result["caveats"]
+
+    # A second call must reuse the cached comment payload rather than re-scraping.
+    again = tools.analyze_sentiment("@creatorlabs", platform="youtube", post_limit=1, comments_per_post=10)
+    assert again["source"]["comments_cache_hit"] is True, again["source"]
+
+    bad = tools.analyze_sentiment("@creatorlabs", platform="youtube", post_limit=0)
+    assert not bad["ok"] and "post_limit" in bad["error"]["message"], bad
+    print("Sentiment tool path: passed")
 
 
 def verify_youtube() -> None:

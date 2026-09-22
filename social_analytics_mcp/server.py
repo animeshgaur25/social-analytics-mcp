@@ -360,6 +360,58 @@ async def audit_profile(
 
 
 @mcp.tool()
+async def analyze_sentiment(
+    username: str,
+    platform: str = "instagram",
+    post_limit: int = 5,
+    comments_per_post: int = 30,
+    date_range: str | None = None,
+    output: str = "none",
+    include_comments: bool = False,
+    ctx: Context | None = None,
+) -> dict:
+    """Analyse audience sentiment in comments on an account's most recent items.
+
+    Scrapes real comments with a second Apify actor, so this costs extra credits
+    beyond the other tools; post_limit x comments_per_post bounds that spend.
+    Scoring runs locally via VADER with an emoji and social-slang lexicon
+    overlay, so no data is sent to a third-party model. The creator's own replies
+    are excluded so the result reflects audience reaction only.
+
+    platform: 'instagram' (default) or 'youtube'.
+    output: 'none' (default, no chart), 'png', 'spec', or 'both'.
+    include_comments: set true to return every scored comment, not just highlights.
+    """
+    start = time.monotonic()
+    client_id = getattr(ctx, "client_id", None) if ctx else None
+    result = await asyncio.to_thread(
+        tools.analyze_sentiment,
+        username,
+        platform,
+        post_limit,
+        comments_per_post,
+        date_range,
+        output,
+        include_comments,
+    )
+    duration_ms = (time.monotonic() - start) * 1000
+    tracker.record_call(
+        "analyze_sentiment",
+        {
+            "username": username,
+            "platform": platform,
+            "post_limit": post_limit,
+            "comments_per_post": comments_per_post,
+        },
+        bool(result.get("ok")),
+        duration_ms,
+        client_id=client_id,
+        error_message=result.get("error", {}).get("message"),
+    )
+    return result
+
+
+@mcp.tool()
 def list_available_metrics(platform: str = "instagram", ctx: Context | None = None) -> dict:
     """List supported dashboard metrics, chart types, and data limits for a platform.
 
