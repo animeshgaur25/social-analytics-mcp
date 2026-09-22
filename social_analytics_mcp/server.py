@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from typing import Any
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import CallToolResult, ImageContent, TextContent
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
@@ -23,8 +25,9 @@ mcp = FastMCP(
         "Analyse public Instagram profiles and YouTube channels with Apify data. Every tool takes "
         "platform='instagram' (default) or platform='youtube'; for YouTube pass a channel handle or "
         "URL such as '@MrBeast'. Use list_available_metrics before selecting a dashboard metric. "
-        "Responses contain modern interactive Plotly charts, base64 PNGs, formatted Markdown data "
-        "tables, and AI performance insights."
+        "Rendered charts are returned as image content blocks; output='spec' returns an "
+        "interactive Plotly JSON specification instead. Responses also carry formatted Markdown "
+        "data tables and AI performance insights."
     ),
     # stdio ignores these settings. Cloud Run uses the HTTP transport below and
     # requires a process that binds to $PORT on all container interfaces.
@@ -33,6 +36,40 @@ mcp = FastMCP(
     streamable_http_path=os.getenv("MCP_HTTP_PATH", "/mcp"),
 )
 tools = SocialAnalyticsTools()
+
+
+def _chart_result(payload: dict[str, Any]) -> CallToolResult:
+    """Deliver rendered charts as real image blocks instead of base64 inside JSON.
+
+    A plain dict return is serialised to TextContent, so a base64 PNG reaches the
+    client as an unreadable ~60KB string that is also duplicated into
+    structuredContent. Returning a CallToolResult lets the image travel as an
+    ImageContent block while the typed payload still populates structuredContent.
+    """
+    images: list[ImageContent] = []
+
+    def take(container: dict[str, Any]) -> None:
+        data = container.pop("image_png_base64", None)
+        if not data:
+            return
+        images.append(
+            ImageContent(
+                type="image",
+                data=data,
+                mimeType=container.get("image_mime_type") or "image/png",
+            )
+        )
+        container["image_delivered_as"] = "content_block"
+
+    take(payload)
+    dashboards = payload.get("dashboards")
+    if isinstance(dashboards, dict):
+        for chart in dashboards.values():
+            if isinstance(chart, dict):
+                take(chart)
+
+    text = TextContent(type="text", text=json.dumps(payload, indent=2, default=str))
+    return CallToolResult(content=[text, *images], structuredContent=payload)
 
 
 @mcp.custom_route("/", methods=["GET"])
@@ -280,7 +317,7 @@ async def generate_dashboard(
     ctx: Context | None = None,
     output: str = "png",
     platform: str = "instagram",
-) -> dict:
+) -> CallToolResult:
     """Generate a light-theme social-performance dashboard for a public account.
 
     platform: 'instagram' (default) or 'youtube'. metric: follower_growth,
@@ -309,7 +346,7 @@ async def generate_dashboard(
         client_id=client_id,
         error_message=result.get("error", {}).get("message"),
     )
-    return result
+    return _chart_result(result)
 
 
 @mcp.tool()
@@ -321,7 +358,7 @@ async def audit_profile(
     ctx: Context | None = None,
     output: str = "png",
     platform: str = "instagram",
-) -> dict:
+) -> CallToolResult:
     """Run a full, single-call performance audit for an Instagram profile or YouTube channel.
 
     Combines:
@@ -355,7 +392,7 @@ async def audit_profile(
         client_id=client_id,
         error_message=result.get("error", {}).get("message"),
     )
-    return result
+    return _chart_result(result)
 
 
 
@@ -369,7 +406,7 @@ async def analyze_sentiment(
     output: str = "none",
     include_comments: bool = False,
     ctx: Context | None = None,
-) -> dict:
+) -> CallToolResult:
     """Analyse audience sentiment in comments on an account's most recent items.
 
     Scrapes real comments with a second Apify actor, so this costs extra credits
@@ -408,7 +445,7 @@ async def analyze_sentiment(
         client_id=client_id,
         error_message=result.get("error", {}).get("message"),
     )
-    return result
+    return _chart_result(result)
 
 
 @mcp.tool()

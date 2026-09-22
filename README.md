@@ -44,10 +44,12 @@ YouTube engagement rate is measured against **views** rather than subscribers, w
 
 
 Each dashboard call returns:
-1. **Interactive Spec (`interactive_chart_spec`)**: Full Plotly JSON structure for rich frontends (hover cards, zoom, pan, responsive labels).
-2. **High-Res PNG (`image_png_base64`)**: Base64-encoded image for standard MCP chat clients.
+1. **Rendered charts as MCP image content blocks**: with `output="png"` (or `"both"`), each chart is delivered as a real `ImageContent` block, so clients render it natively. The base64 is deliberately *not* duplicated into the JSON payload — see below.
+2. **Interactive Spec (`interactive_chart_spec`)**: Full Plotly JSON structure for rich frontends (hover cards, zoom, pan, responsive labels), via `output="spec"`.
 3. **Markdown Table (`markdown_table`)**: Clean, formatted tabular presentation of the underlying data.
 4. **Insights & Recommendations (`insights`)**: Takeaways including top formats, engagement rates, benchmarks, and tactical recommendations.
+
+> **Why images are content blocks.** Returning a plain dict from a FastMCP tool serialises it to `TextContent`, so a base64 PNG arrives as an unreadable ~56KB string that is *also* duplicated into `structuredContent`. A three-chart audit cost ~175KB of text that no model could actually see as an image. The chart tools now return a `CallToolResult` carrying real `ImageContent` blocks alongside `structuredContent`, which cut the audit's text payload from ~175KB to ~5KB with no loss of structured data.
 
 ---
 

@@ -200,7 +200,49 @@ def main() -> None:
     verify_youtube()
     verify_sentiment_scoring()
     verify_sentiment_tool()
+    verify_mcp_chart_format()
     print("Offline component tests passed.")
+
+
+def verify_mcp_chart_format() -> None:
+    """Charts must travel as real image blocks, not base64 buried in JSON text."""
+    import asyncio
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    from social_analytics_mcp import server
+
+    server.tools = SocialAnalyticsTools(
+        youtube_fetcher=ApifyYouTubeFetcher(
+            client=FakeYouTubeClient(YOUTUBE_ITEMS), poll_interval_seconds=0.001, timeout_seconds=1
+        )
+    )
+
+    async def run() -> None:
+        async with create_connected_server_and_client_session(server.mcp._mcp_server) as session:
+            res = await session.call_tool(
+                "generate_dashboard",
+                {"username": "@creatorlabs", "metric": "top_posts_by_engagement",
+                 "platform": "youtube", "output": "png"},
+            )
+            kinds = [block.type for block in res.content]
+            assert kinds.count("image") == 1, kinds
+            assert res.structuredContent, "structuredContent must survive the image split"
+            text = "".join(getattr(b, "text", "") for b in res.content)
+            # The base64 must not also be pasted into the text payload.
+            assert "image_png_base64" not in text, "base64 leaked back into the text block"
+            assert len(text) < 10_000, f"text payload unexpectedly large: {len(text)}"
+
+            spec_res = await session.call_tool(
+                "generate_dashboard",
+                {"username": "@creatorlabs", "metric": "top_posts_by_engagement",
+                 "platform": "youtube", "output": "spec"},
+            )
+            assert [b.type for b in spec_res.content] == ["text"], spec_res.content
+            assert spec_res.structuredContent
+
+    asyncio.run(run())
+    print("MCP chart content format: passed")
 
 
 def verify_sentiment_scoring() -> None:
@@ -293,8 +335,12 @@ def verify_sentiment_tool() -> None:
     assert result["overall_label"] == "positive"
     assert result["most_positive_comments"], result
     assert "Sentiment" in result["markdown_table"]
-    assert result["per_video_breakdown"], result
     assert any("English-only" in c for c in result["caveats"]), result["caveats"]
+    # Keys must not shift with the platform, or clients cannot parse one shape.
+    for key in ("posts_analyzed", "per_post_breakdown", "per_post_markdown", "item_noun"):
+        assert key in result, f"missing stable key {key}"
+    assert result["item_noun"] == "video", result["item_noun"]
+    assert not [k for k in result if "video" in k], f"platform-specific keys leaked: {[k for k in result if 'video' in k]}"
 
     # A second call must reuse the cached comment payload rather than re-scraping.
     again = tools.analyze_sentiment("@creatorlabs", platform="youtube", post_limit=1, comments_per_post=10)
