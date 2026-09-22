@@ -25,14 +25,19 @@ YouTube engagement rate is measured against **views** rather than subscribers, w
 
 ## What It Exposes
 
-| Tool | Parameters | Purpose & Output |
-| --- | --- | --- |
-| `audit_profile` | `username`, `date_range`, `post_limit`, `top_n`, `output`, `platform` | **All-in-one comprehensive audit**: returns account stats, all 3 dashboard views (top posts/videos, engagement trajectory, content types) with charts, formatted markdown tables, and AI recommendations in a single call. |
-| `get_profile_summary` | `username`, `platform` | Returns audience, following, and item counts, verification status, authority/lifetime-views analysis, and a structured Markdown summary table. |
-| `get_engagement_metrics` | `username`, `date_range`, `post_limit`, `platform` | Returns item-level metrics (likes, comments, views on YouTube, media type, engagement rate), a sorted Markdown table, and content-type breakdowns. |
-| `generate_dashboard` | `username`, `metric`, `chart_type`, `date_range`, `top_n`, `output`, `platform` | Generates a styled light-theme dashboard. Supports `output="png"`, `"spec"` (Plotly JSON), or `"both"`. Use `metric="all"` to trigger the full audit. |
-| `analyze_sentiment` | `username`, `platform`, `post_limit`, `comments_per_post`, `date_range`, `output`, `include_comments` | Scores **audience comments** on recent items: positive/neutral/negative split, net sentiment, per-item breakdown, most positive and negative comments, and an optional distribution chart. Scraping comments costs **extra Apify credits** — see below. |
-| `list_available_metrics` | `platform` | Lists supported metrics (`engagement_rate_over_time`, `top_posts_by_engagement`, `content_type_comparison`, `follower_growth`, `all`), default chart types, and operational bounds for that platform. |
+Every tool takes `platform="instagram"` (default) or `"youtube"`. Parameters are listed as `name=default`; `username` is always required.
+
+| Tool | Parameters | Apify cost | Purpose & Output |
+| --- | --- | --- | --- |
+| `audit_profile` | `date_range=None`, `post_limit=12`, `top_n=5`, `output="png"`, `platform="instagram"` | 1 actor run | **All-in-one comprehensive audit**: account stats, all 3 dashboard views (top posts/videos, engagement trajectory, content types), formatted Markdown tables, and AI recommendations in a single call. Charts return as **image content blocks**. |
+| `get_profile_summary` | `platform="instagram"` | 1 actor run | Audience, following, and item counts, verification status, authority ratio (Instagram) or lifetime views (YouTube), and a structured Markdown summary table. |
+| `get_engagement_metrics` | `date_range=None`, `post_limit=12`, `platform="instagram"` | 1 actor run | Item-level metrics (likes, comments, views on YouTube, media type, engagement rate), a sorted Markdown table, and content-type breakdowns. |
+| `generate_dashboard` | `metric` *(required)*, `chart_type=None`, `date_range=None`, `top_n=5`, `output="png"`, `platform="instagram"` | 1 actor run | One styled light-theme chart. `output="png"` returns an **image content block**, `"spec"` a Plotly JSON spec, `"both"` for both. `metric="all"` delegates to the full audit. |
+| `analyze_sentiment` | `post_limit=5`, `comments_per_post=30`, `date_range=None`, `output="none"`, `include_comments=False`, `platform="instagram"` | **2 actor runs** | Scores **audience comments**: positive/neutral/negative split, net sentiment, per-item breakdown, strongest praise and criticism, accuracy `caveats`, and an optional distribution chart. The only tool that runs a second actor — see [Audience Sentiment](#audience-sentiment). |
+| `list_available_metrics` | `platform="instagram"` | none | Supported metrics (`engagement_rate_over_time`, `top_posts_by_engagement`, `content_type_comparison`, `follower_growth`, `all`), default chart types, and operational bounds for that platform. |
+| `get_usage_metrics` | *none* | none | Live telemetry: invocation counts, unique callers, per-tool breakdown, error counts, and uptime. Same data as the `/stats` endpoint. |
+
+A cached account costs **no** actor run at all — see [Shared cache](#google-cloud-run-deployment). Responses carry `source.cache_hit` so you can tell which calls actually hit Apify.
 
 ### Dashboard Metrics & Outputs
 
