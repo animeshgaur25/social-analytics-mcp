@@ -39,6 +39,72 @@ Every tool takes `platform="instagram"` (default) or `"youtube"`. Parameters are
 
 A cached account costs **no** actor run at all — see [Shared cache](#google-cloud-run-deployment). Responses carry `source.cache_hit` so you can tell which calls actually hit Apify.
 
+### Sample Prompts
+
+Once the server is connected, you can just ask in plain language — the model picks the tool and the `platform`. Naming the network ("on YouTube") or passing a handle like `@MrBeast` is enough to switch platforms.
+
+**Profile and channel basics**
+
+| Ask | Calls |
+| --- | --- |
+| "How many followers does @cristiano have on Instagram?" | `get_profile_summary` |
+| "Give me a summary of the MrBeast YouTube channel." | `get_profile_summary` *(youtube)* |
+| "Is @eminem verified, and what's his follower-to-following ratio?" | `get_profile_summary` |
+| "How many lifetime views does @MrBeast's channel have?" | `get_profile_summary` *(youtube)* |
+
+**Engagement**
+
+| Ask | Calls |
+| --- | --- |
+| "What's the average engagement rate on @cristiano's last 12 posts?" | `get_engagement_metrics` |
+| "Show me per-video likes, comments and views for @MrBeast." | `get_engagement_metrics` *(youtube)* |
+| "Which of @eminem's posts from the last 30 days performed best?" | `get_engagement_metrics` with `date_range="30d"` |
+| "Compare engagement on posts between 2026-01-01 and 2026-03-31 for @cristiano." | `get_engagement_metrics` with an ISO range |
+
+**Charts**
+
+| Ask | Calls |
+| --- | --- |
+| "Chart @cristiano's engagement rate over time." | `generate_dashboard` → `engagement_rate_over_time` |
+| "Show me @eminem's top 5 posts by engagement as a bar chart." | `generate_dashboard` → `top_posts_by_engagement` |
+| "Do Reels beat carousels for @cristiano?" | `generate_dashboard` → `content_type_comparison` |
+| "Are Shorts or long-form videos better for @MrBeast?" | `generate_dashboard` → `content_type_comparison` *(youtube)* |
+| "Give me that chart as an interactive Plotly spec instead of an image." | same, with `output="spec"` |
+| "What metrics can I chart for YouTube?" | `list_available_metrics` *(youtube)* |
+
+**Full audit**
+
+| Ask | Calls |
+| --- | --- |
+| "Run a full audit on @cristiano." | `audit_profile` |
+| "Give me a complete 360 report on the MrBeast channel." | `audit_profile` *(youtube)* |
+| "I'm pitching @eminem for a campaign — everything you've got." | `audit_profile` |
+
+**Audience sentiment**
+
+| Ask | Calls |
+| --- | --- |
+| "How do people feel about @MrBeast's recent videos?" | `analyze_sentiment` *(youtube)* |
+| "Is the comment sentiment on @cristiano's last 3 posts positive or negative?" | `analyze_sentiment` with `post_limit=3` |
+| "What are people complaining about in @eminem's comments?" | `analyze_sentiment` — read `most_negative_comments` |
+| "Check sentiment on @MrBeast and chart the breakdown." | `analyze_sentiment` with `output="png"` |
+| "Is this account safe to sponsor? Check audience reaction." | `audit_profile` + `analyze_sentiment` |
+
+**Operations**
+
+| Ask | Calls |
+| --- | --- |
+| "How many times has this server been called today?" | `get_usage_metrics` |
+| "Which tool is erroring most?" | `get_usage_metrics` |
+
+**Multi-step asks** — the model chains tools on its own:
+
+- "Compare @cristiano and @eminem on engagement rate and tell me who to pick." → two `get_engagement_metrics` calls
+- "Audit @MrBeast on YouTube, then check whether the comments back up the numbers." → `audit_profile` then `analyze_sentiment`
+- "Which format should @cristiano post more of, and do commenters agree?" → `generate_dashboard` then `analyze_sentiment`
+
+> Sentiment asks scrape comments and cost extra Apify credits. If you want a cheap answer, say so — "just use the last 2 posts, 10 comments each" maps to `post_limit=2, comments_per_post=10`.
+
 ### Dashboard Metrics & Outputs
 
 - **`all` / `audit_profile`**: Full 360-degree account audit returning all three chart views below, two data tables, and an executive markdown report in one call.
@@ -260,12 +326,71 @@ From an MCP client, the same thing is a `platform` argument:
 
 `analyze_sentiment` scrapes the actual comment threads on an account's most recent items and scores them locally.
 
-```bash
-social-analytics sentiment cristiano --post-limit 3 --comments-per-post 30
-social-analytics sentiment @MrBeast --platform youtube --post-limit 3 --output png
+### From an MCP client
+
+In practice you just ask — *"How do people feel about @MrBeast's last couple of videos? Keep it cheap, 15 comments each."* — and the model issues this call:
+
+```json
+{
+  "name": "analyze_sentiment",
+  "arguments": {
+    "username": "@MrBeast",
+    "platform": "youtube",
+    "post_limit": 2,
+    "comments_per_post": 15
+  }
+}
 ```
 
-*Sample output:*
+Abridged response (real values from a live run against the deployed service):
+
+```json
+{
+  "ok": true,
+  "platform": "youtube",
+  "username": "MrBeast",
+  "item_noun": "video",
+  "engine": "vaderSentiment with an emoji and social-slang lexicon overlay",
+  "source": {
+    "provider": "Apify",
+    "actor": "streamers/youtube-scraper",
+    "comment_actor": "streamers/youtube-comments-scraper",
+    "cache_hit": false,
+    "comments_cache_hit": false
+  },
+  "posts_analyzed": 2,
+  "comments_fetched": 30,
+  "comments_analyzed": 28,
+  "comments_excluded_as_owner": 2,
+  "distribution":         { "positive": 17, "neutral": 9, "negative": 2 },
+  "distribution_percent": { "positive": 60.7, "neutral": 32.1, "negative": 7.1 },
+  "average_compound": 0.4333,
+  "net_sentiment_score": 53.6,
+  "overall_label": "positive",
+  "verdict": "overwhelmingly positive",
+  "most_positive_comments": [
+    {
+      "text": "sick video mr beast. You're changing lives and inspiring...",
+      "author": "a",
+      "likes": 0,
+      "sentiment": "positive",
+      "sentiment_score": 0.8519,
+      "item_url": "https://www.youtube.com/watch?v=v9QtM6qnG50",
+      "is_owner": false
+    }
+  ],
+  "most_negative_comments": ["..."],
+  "per_post_breakdown": ["..."],
+  "markdown_table": "| Sentiment | Comments | Share |...",
+  "per_post_markdown": "| # | Title | Comments | Pos | Neu | Neg | Net | Avg |...",
+  "top_comments_markdown": "| Sentiment | Score | Likes | Comment |...",
+  "insights": ["..."],
+  "recommendations": ["..."],
+  "caveats": ["Scoring is English-only..."]
+}
+```
+
+`markdown_table` renders as:
 
 ```text
 | Sentiment | Comments | Share |
@@ -274,6 +399,32 @@ social-analytics sentiment @MrBeast --platform youtube --post-limit 3 --output p
 | Neutral | 9 | 32.1% |
 | Negative | 2 | 7.1% |
 ```
+
+### From the CLI
+
+```bash
+# Instagram, default 5 posts x 30 comments
+social-analytics sentiment cristiano
+
+# YouTube, smaller sample plus a distribution chart
+social-analytics sentiment @MrBeast --platform youtube --post-limit 3 --output png
+
+# Return every scored comment, not just the highlights
+social-analytics sentiment cristiano --post-limit 2 --include-comments
+```
+
+### Reading the numbers
+
+| Field | Meaning |
+| --- | --- |
+| `distribution_percent` | Share of comments in each bucket. Start here. |
+| `net_sentiment_score` | `positive% − negative%`, so it ignores the neutral mass that dominates emoji-only threads. Ranges −100 to +100. |
+| `average_compound` | Mean VADER compound score, −1 to +1. Sensitive to a few very strong comments. |
+| `verdict` | Plain-language bucket derived from `net_sentiment_score`. |
+| `overall_label` | Classification of `average_compound`. |
+| `comments_excluded_as_owner` | Creator's own replies, dropped before scoring. |
+
+> Note that `verdict` and `overall_label` answer slightly different questions and **can disagree** — a thread with equal positive and negative counts but stronger positive wording yields `net_sentiment_score: 0.0` (`verdict: "mixed or neutral"`) alongside `overall_label: "positive"`. Prefer `distribution_percent` and `net_sentiment_score` for reporting; treat `overall_label` as a secondary signal about intensity rather than balance.
 
 **Cost.** This is the only tool that runs a *second* Apify actor (`apify/instagram-comment-scraper` or `streamers/youtube-comments-scraper`), so it costs extra credits on top of the profile fetch. Spend is bounded by `post_limit × comments_per_post`; both default conservatively (5 × 30). Comment payloads are cached per session, so repeat calls with the same arguments are free.
 
