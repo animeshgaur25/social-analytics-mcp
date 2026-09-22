@@ -319,6 +319,12 @@ APIFY_API_TOKEN='your-token' ./scripts/deploy_cloud_run.sh YOUR_PROJECT_ID us-ce
 
 The script manages Google Secret Manager, configures IAM roles, and provisions Cloud Run with 2 CPU / 2Gi RAM for Kaleido image rendering.
 
+**Timeouts.** `analyze_sentiment` runs two actors back to back (profile, then comments), and a YouTube channel scrape alone can take ~90s, so the deploy sets a 600s Cloud Run request timeout and a 240s per-actor Apify poll budget. Override either with `CLOUD_RUN_TIMEOUT_SECONDS` or `APIFY_RUN_TIMEOUT_SECONDS`:
+
+```bash
+CLOUD_RUN_TIMEOUT_SECONDS=900 ./scripts/deploy_cloud_run.sh YOUR_PROJECT_ID us-central1
+```
+
 ---
 
 ## License

@@ -58,7 +58,12 @@ if [[ "$allow_unauth" == "false" ]]; then
   auth_flag="--no-allow-unauthenticated"
 fi
 
-echo "Building container and deploying to Cloud Run (memory: 2Gi, cpu: 2, timeout: 300s)..."
+# analyze_sentiment runs two actors back to back (profile, then comments), so the
+# request timeout must cover both Apify polls plus overhead, not just one.
+apify_run_timeout="${APIFY_RUN_TIMEOUT_SECONDS:-240}"
+request_timeout="${CLOUD_RUN_TIMEOUT_SECONDS:-600}"
+
+echo "Building container and deploying to Cloud Run (memory: 2Gi, cpu: 2, timeout: ${request_timeout}s)..."
 gcloud run deploy "$service_name" \
   --source . \
   --project "$project_id" \
@@ -66,10 +71,10 @@ gcloud run deploy "$service_name" \
   --service-account "$service_account_email" \
   --memory "2Gi" \
   --cpu "2" \
-  --timeout "300" \
+  --timeout "$request_timeout" \
   --concurrency "80" \
   --set-secrets="APIFY_API_TOKEN=${secret_name}:latest" \
-  --set-env-vars="MCP_TRANSPORT=streamable-http,MCP_HOST=0.0.0.0,MCP_HTTP_PATH=/mcp" \
+  --set-env-vars="MCP_TRANSPORT=streamable-http,MCP_HOST=0.0.0.0,MCP_HTTP_PATH=/mcp,APIFY_RUN_TIMEOUT_SECONDS=${apify_run_timeout}" \
   "$auth_flag" \
   --quiet
 
