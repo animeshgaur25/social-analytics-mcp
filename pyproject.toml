@@ -15,6 +15,7 @@ dependencies = [
   "kaleido>=1.0,<2",
   "python-dotenv>=1.0,<2",
   "vaderSentiment>=3.3,<4",
+  "google-cloud-storage>=2.14,<4",
 ]
 
 [project.scripts]

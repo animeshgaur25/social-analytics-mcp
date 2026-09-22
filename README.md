@@ -321,6 +321,8 @@ APIFY_API_TOKEN='your-token' ./scripts/deploy_cloud_run.sh YOUR_PROJECT_ID us-ce
 
 The script manages Google Secret Manager, configures IAM roles, and provisions Cloud Run with 2 CPU / 2Gi RAM for Kaleido image rendering.
 
+**Shared cache.** Cloud Run recycles instances freely and scales horizontally, so a per-process cache is cold far more often than not — and every miss costs a 30–90s Apify run. The deploy provisions a `gs://<project>-social-analytics-cache` bucket and sets `CACHE_BACKEND=gcs`, so all instances share one cache. Lookups check local memory first and fall back to the bucket, promoting any shared hit into memory. The backend is strictly best-effort: if the bucket is unreachable, the server logs a warning and serves from memory rather than failing the call. Entries carry their own TTL (`PROFILE_CACHE_TTL_SECONDS`), and a 1-day lifecycle rule sweeps up objects that expiry already made unreadable. Local runs default to `CACHE_BACKEND=memory` and need no bucket.
+
 **Timeouts.** `analyze_sentiment` runs two actors back to back (profile, then comments), and a YouTube channel scrape alone can take ~90s, so the deploy sets a 600s Cloud Run request timeout and a 240s per-actor Apify poll budget. Override either with `CLOUD_RUN_TIMEOUT_SECONDS` or `APIFY_RUN_TIMEOUT_SECONDS`:
 
 ```bash

@@ -26,6 +26,7 @@ fi
 echo "Deploying $service_name to Google Cloud Run (project: $project_id, region: $region)..."
 
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com \
+  storage.googleapis.com \
   --project "$project_id"
 
 service_account_email="${service_account_name}@${project_id}.iam.gserviceaccount.com"
@@ -53,6 +54,36 @@ gcloud secrets add-iam-policy-binding "$secret_name" \
   --role="roles/secretmanager.secretAccessor" \
   --project "$project_id" >/dev/null
 
+# Cloud Run recycles instances freely, so an in-process cache is cold far more
+# often than not and every miss costs a 30-90s Apify run. This bucket lets all
+# instances share one cache; entries carry their own TTL and the lifecycle rule
+# only sweeps up what expiry already made unreadable.
+cache_bucket="${CACHE_BUCKET:-${project_id}-social-analytics-cache}"
+
+if ! gcloud storage buckets describe "gs://${cache_bucket}" --project "$project_id" >/dev/null 2>&1; then
+  echo "Creating cache bucket gs://${cache_bucket}..."
+  gcloud storage buckets create "gs://${cache_bucket}" \
+    --project "$project_id" \
+    --location "$region" \
+    --uniform-bucket-level-access
+else
+  echo "Reusing cache bucket gs://${cache_bucket}..."
+fi
+
+lifecycle_file="$(mktemp)"
+trap 'rm -f "$lifecycle_file"' EXIT
+cat >"$lifecycle_file" <<'JSON'
+{"lifecycle": {"rule": [{"action": {"type": "Delete"}, "condition": {"age": 1}}]}}
+JSON
+gcloud storage buckets update "gs://${cache_bucket}" \
+  --lifecycle-file="$lifecycle_file" \
+  --project "$project_id" >/dev/null
+
+gcloud storage buckets add-iam-policy-binding "gs://${cache_bucket}" \
+  --member="serviceAccount:${service_account_email}" \
+  --role="roles/storage.objectAdmin" \
+  --project "$project_id" >/dev/null
+
 auth_flag="--allow-unauthenticated"
 if [[ "$allow_unauth" == "false" ]]; then
   auth_flag="--no-allow-unauthenticated"
@@ -74,7 +105,7 @@ gcloud run deploy "$service_name" \
   --timeout "$request_timeout" \
   --concurrency "80" \
   --set-secrets="APIFY_API_TOKEN=${secret_name}:latest" \
-  --set-env-vars="MCP_TRANSPORT=streamable-http,MCP_HOST=0.0.0.0,MCP_HTTP_PATH=/mcp,APIFY_RUN_TIMEOUT_SECONDS=${apify_run_timeout}" \
+  --set-env-vars="MCP_TRANSPORT=streamable-http,MCP_HOST=0.0.0.0,MCP_HTTP_PATH=/mcp,APIFY_RUN_TIMEOUT_SECONDS=${apify_run_timeout},CACHE_BACKEND=gcs,CACHE_BUCKET=${cache_bucket}" \
   "$auth_flag" \
   --quiet
 
@@ -82,6 +113,7 @@ service_url="$(gcloud run services describe "$service_name" --project "$project_
 echo "=========================================================="
 echo "Deployment successful!"
 echo "Service Base URL:     ${service_url}"
+echo "Shared cache bucket:  gs://${cache_bucket}"
 echo "MCP Streamable URL:   ${service_url}/mcp"
 echo "Health Check:         ${service_url}/health"
 echo "Live Stats/Telemetry: ${service_url}/stats"

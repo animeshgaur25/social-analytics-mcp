@@ -11,7 +11,7 @@ from .apify import (
     ApifyYouTubeCommentFetcher,
     ApifyYouTubeFetcher,
 )
-from .cache import FollowerHistory, SessionProfileCache
+from .cache import FollowerHistory, SessionProfileCache, build_cache_backend
 from .charts import ChartGenerator, DEFAULT_CHART_TYPES, SUPPORTED_CHART_TYPES, SUPPORTED_METRICS
 from .errors import InvalidRequestError, SocialAnalyticsError
 from .insights import build_content_type_table, build_posts_table, generate_post_insights
@@ -57,7 +57,8 @@ class SocialAnalyticsTools:
         self._comment_fetcher = comment_fetcher or ApifyInstagramCommentFetcher()
         self._youtube_comment_fetcher = youtube_comment_fetcher or ApifyYouTubeCommentFetcher()
         self._cache = cache or SessionProfileCache(
-            ttl_seconds=int(os.getenv("PROFILE_CACHE_TTL_SECONDS", "900"))
+            ttl_seconds=int(os.getenv("PROFILE_CACHE_TTL_SECONDS", "900")),
+            backend=build_cache_backend(),
         )
         self._follower_history = follower_history or FollowerHistory()
         self._chart_generator = chart_generator or ChartGenerator()

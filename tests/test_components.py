@@ -201,7 +201,95 @@ def main() -> None:
     verify_sentiment_scoring()
     verify_sentiment_tool()
     verify_mcp_chart_format()
+    verify_shared_cache()
     print("Offline component tests passed.")
+
+
+class FakeBlob:
+    def __init__(self, store: dict, name: str, fail: bool = False) -> None:
+        self.store, self.name, self.fail = store, name, fail
+
+    def download_as_bytes(self) -> bytes:
+        if self.fail:
+            raise RuntimeError("simulated GCS outage")
+        if self.name not in self.store:
+            raise RuntimeError("404 not found")
+        return self.store[self.name]
+
+    def upload_from_string(self, data: str, content_type: str = "") -> None:
+        if self.fail:
+            raise RuntimeError("simulated GCS outage")
+        self.store[self.name] = data.encode()
+
+
+class FakeBucket:
+    def __init__(self, store: dict, fail: bool = False) -> None:
+        self.store, self.fail = store, fail
+
+    def blob(self, name: str) -> FakeBlob:
+        return FakeBlob(self.store, name, self.fail)
+
+
+class FakeStorageClient:
+    def __init__(self, store: dict, fail: bool = False) -> None:
+        self.store, self.fail = store, fail
+
+    def bucket(self, name: str) -> FakeBucket:
+        return FakeBucket(self.store, self.fail)
+
+
+def verify_shared_cache() -> None:
+    """A second process must reuse a cached profile instead of re-running the actor."""
+    import json as _json
+
+    from social_analytics_mcp.cache import GcsCacheBackend, SessionProfileCache
+
+    store: dict = {}
+    backend = GcsCacheBackend("test-bucket", client=FakeStorageClient(store))
+
+    # Cache keys contain ':' and full URLs, which are not valid object names.
+    messy_key = "youtube:comments:30:https://www.youtube.com/watch?v=abc/def"
+    backend.write(messy_key, {"items": [1, 2]}, ttl_seconds=900)
+    assert backend.read(messy_key) == {"items": [1, 2]}
+    assert all("/" not in name.split("/", 1)[1] for name in store), list(store)
+
+    # Expired entries must not be served.
+    backend.write("stale", {"v": 1}, ttl_seconds=-1)
+    assert backend.read("stale") is None
+
+    # Simulating a fresh instance: empty memory, warm shared store.
+    first = SessionProfileCache(ttl_seconds=900, backend=backend)
+    first.put("instagram:eminem", {"username": "eminem", "followers": 5})
+    second = SessionProfileCache(ttl_seconds=900, backend=backend)
+    hit = second.get("instagram:eminem")
+    assert hit is not None and hit.value["followers"] == 5, "cold instance missed the shared cache"
+    # The shared hit must be promoted into local memory.
+    assert "instagram:eminem" in second._items
+
+    # A backend outage must degrade to memory, never raise.
+    broken = SessionProfileCache(
+        ttl_seconds=900,
+        backend=GcsCacheBackend("test-bucket", client=FakeStorageClient({}, fail=True)),
+    )
+    broken.put("instagram:x", {"username": "x"})
+    assert broken.get("instagram:x").value["username"] == "x"
+    assert broken.get("instagram:missing") is None
+
+    # Memory-only mode stays the default.
+    import os as _os
+    _os.environ.pop("CACHE_BACKEND", None)
+    from social_analytics_mcp.cache import build_cache_backend
+    assert build_cache_backend() is None
+    _os.environ["CACHE_BACKEND"] = "gcs"
+    assert build_cache_backend() is None, "gcs without CACHE_BUCKET must fall back to memory"
+    _os.environ["CACHE_BUCKET"] = "some-bucket"
+    assert isinstance(build_cache_backend(), GcsCacheBackend)
+    _os.environ.pop("CACHE_BACKEND", None)
+    _os.environ.pop("CACHE_BUCKET", None)
+
+    entry = _json.loads(store[next(iter(store))])
+    assert "expires_at" in entry and "value" in entry, entry
+    print("Shared cache: passed")
 
 
 def verify_mcp_chart_format() -> None:
