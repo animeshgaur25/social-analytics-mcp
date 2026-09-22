@@ -13,21 +13,31 @@ from dotenv import load_dotenv
 from .tools import SocialAnalyticsTools
 
 
+PLATFORM_HELP = "Network to query: instagram (default) or youtube (pass a handle such as @MrBeast)."
+
+
+def _add_platform(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--platform", choices=("instagram", "youtube"), default="instagram", help=PLATFORM_HELP)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Test social-analytics-mcp tools from a terminal.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     profile = commands.add_parser("profile", help="Call get_profile_summary")
     profile.add_argument("username")
+    _add_platform(profile)
 
     engagement = commands.add_parser("engagement", help="Call get_engagement_metrics")
     engagement.add_argument("username")
     engagement.add_argument("--date-range", default=None)
     engagement.add_argument("--post-limit", type=int, default=12)
+    _add_platform(engagement)
 
     dashboard = commands.add_parser("dashboard", help="Call generate_dashboard")
     dashboard.add_argument("username")
     dashboard.add_argument("metric")
+    _add_platform(dashboard)
     dashboard.add_argument("--chart-type", choices=("line", "bar"))
     dashboard.add_argument("--date-range", default=None)
     dashboard.add_argument("--top-n", type=int, default=5)
@@ -50,8 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="png",
         help="Which chart representation(s) to request from the tool.",
     )
+    _add_platform(audit)
 
-    commands.add_parser("metrics", help="Call list_available_metrics")
+    metrics = commands.add_parser("metrics", help="Call list_available_metrics")
+    _add_platform(metrics)
     return parser
 
 
@@ -61,12 +73,20 @@ def main() -> None:
     toolset = SocialAnalyticsTools()
 
     if args.command == "profile":
-        result = toolset.get_profile_summary(args.username)
+        result = toolset.get_profile_summary(args.username, args.platform)
     elif args.command == "engagement":
-        result = toolset.get_engagement_metrics(args.username, args.date_range, args.post_limit)
+        result = toolset.get_engagement_metrics(
+            args.username, args.date_range, args.post_limit, args.platform
+        )
     elif args.command == "dashboard":
         result = toolset.generate_dashboard(
-            args.username, args.metric, args.chart_type, args.date_range, args.top_n, args.output
+            args.username,
+            args.metric,
+            args.chart_type,
+            args.date_range,
+            args.top_n,
+            args.output,
+            args.platform,
         )
         _write_chart_if_requested(result, args.png_output)
         # A base64 PNG makes terminal output unusably long. It is retained in
@@ -76,14 +96,14 @@ def main() -> None:
             result["image_png_base64_length"] = len(image)
     elif args.command == "audit":
         result = toolset.audit_profile(
-            args.username, args.date_range, args.post_limit, args.top_n, args.output
+            args.username, args.date_range, args.post_limit, args.top_n, args.output, args.platform
         )
         if result.get("ok"):
             for dash_name, dash_data in result.get("dashboards", {}).items():
                 if isinstance(dash_data, dict) and "image_png_base64" in dash_data:
                     dash_data["image_png_base64_length"] = len(dash_data.pop("image_png_base64"))
     else:
-        result = toolset.list_available_metrics()
+        result = toolset.list_available_metrics(args.platform)
     print(json.dumps(result, indent=2, default=str))
 
 

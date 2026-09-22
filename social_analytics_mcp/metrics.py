@@ -17,6 +17,39 @@ def normalize_username(username: str) -> str:
     return cleaned.lower()
 
 
+def normalize_channel_handle(value: str) -> str:
+    """Return a canonical YouTube reference: '@handle', 'channel/UC…', 'c/Name', or 'user/Name'."""
+    cleaned = value.strip().rstrip("/")
+    if not cleaned:
+        raise InvalidRequestError("Provide a YouTube channel handle or URL, for example '@MrBeast'.")
+
+    lowered = cleaned.lower()
+    for marker in ("youtube.com/", "youtu.be/"):
+        if marker in lowered:
+            cleaned = cleaned[lowered.index(marker) + len(marker) :]
+            break
+
+    segments = [segment for segment in cleaned.split("?", 1)[0].split("/") if segment]
+    if not segments:
+        raise InvalidRequestError("Provide a YouTube channel handle or URL, for example '@MrBeast'.")
+
+    first = segments[0]
+    if first.lower() in {"channel", "c", "user"} and len(segments) > 1:
+        reference = f"{first.lower()}/{segments[1]}"
+    elif first.startswith("UC") and len(first) == 24:
+        reference = f"channel/{first}"
+    else:
+        reference = f"@{first.removeprefix('@')}"
+
+    if any(char.isspace() for char in reference) or reference in {"@", "channel/", "c/", "user/"}:
+        raise InvalidRequestError("Provide a YouTube channel handle or URL, for example '@MrBeast'.")
+    return reference
+
+
+def youtube_channel_url(reference: str) -> str:
+    return f"https://www.youtube.com/{reference}"
+
+
 def normalize_profile(raw: dict[str, Any]) -> dict[str, Any]:
     """Map actor output into a stable, source-independent profile shape."""
     username = str(raw.get("username") or "").strip().lstrip("@")
@@ -32,6 +65,7 @@ def normalize_profile(raw: dict[str, Any]) -> dict[str, Any]:
     posts.sort(key=lambda post: post["timestamp"] or "", reverse=True)
 
     return {
+        "platform": "instagram",
         "username": username,
         "full_name": raw.get("fullName") or username,
         "bio": raw.get("biography") or "",
@@ -41,6 +75,73 @@ def normalize_profile(raw: dict[str, Any]) -> dict[str, Any]:
         "verified": bool(raw.get("verified")),
         "posts": posts,
     }
+
+
+def normalize_youtube_channel(items: list[dict[str, Any]], reference: str) -> dict[str, Any]:
+    """Fold the actor's per-video dataset into the same profile shape as Instagram."""
+    videos_raw = [item for item in items if isinstance(item, dict)]
+    if not videos_raw:
+        raise NoDataError(f"Apify returned no videos for {reference}.")
+
+    head = max(videos_raw, key=lambda item: _nonnegative_int(item.get("numberOfSubscribers")))
+    handle = str(head.get("channelUsername") or head.get("channelHandle") or "").strip().lstrip("@")
+    name = str(head.get("channelName") or head.get("channelTitle") or "").strip()
+    fallback = reference.removeprefix("@").split("/")[-1]
+
+    subscribers = _nonnegative_int(head.get("numberOfSubscribers") or head.get("channelSubscribers"))
+    videos = [normalize_youtube_video(video, subscribers) for video in videos_raw]
+    videos.sort(key=lambda video: video["timestamp"] or "", reverse=True)
+
+    return {
+        "platform": "youtube",
+        "username": handle or name or fallback,
+        "full_name": name or handle or fallback,
+        "bio": head.get("channelDescription") or "",
+        "followers": subscribers,
+        "following": 0,
+        "post_count": _nonnegative_int(head.get("channelTotalVideos")),
+        "verified": bool(head.get("isChannelVerified") or head.get("channelIsVerified")),
+        "channel_url": head.get("channelUrl") or youtube_channel_url(reference),
+        "channel_total_views": _nonnegative_int(head.get("channelTotalViews")),
+        "posts": videos,
+    }
+
+
+def normalize_youtube_video(raw: dict[str, Any], subscribers: int) -> dict[str, Any]:
+    likes = _nonnegative_int(raw.get("likes"))
+    comments = _nonnegative_int(raw.get("commentsCount"))
+    views = _nonnegative_int(raw.get("viewCount"))
+    engagement = likes + comments
+    # YouTube engagement is conventionally measured against views; subscribers
+    # only stand in when the actor withheld the view count.
+    denominator = views or subscribers
+    rate = engagement / denominator if denominator else 0.0
+    return {
+        "id": str(raw.get("id") or raw.get("videoId") or "unknown"),
+        "shortcode": str(raw.get("id") or raw.get("videoId") or ""),
+        "url": raw.get("url") or "",
+        "timestamp": _iso_timestamp(raw.get("date") or raw.get("uploadDate")),
+        "media_type": youtube_media_type(raw),
+        "likes": likes,
+        "comments": comments,
+        "views": views,
+        "engagement": engagement,
+        "engagement_rate": rate,
+        "engagement_rate_percent": round(rate * 100, 4),
+        "engagement_rate_basis": "views" if views else "subscribers",
+        "caption": raw.get("title") or "",
+        "duration": raw.get("duration") or "",
+    }
+
+
+def youtube_media_type(video: dict[str, Any]) -> str:
+    raw_type = str(video.get("type") or "").lower()
+    url = str(video.get("url") or "").lower()
+    if "short" in raw_type or "/shorts/" in url:
+        return "short"
+    if raw_type in {"stream", "livestream", "live"} or video.get("isLive") is True:
+        return "livestream"
+    return "video"
 
 
 def normalize_post(raw: dict[str, Any], followers: int) -> dict[str, Any]:
@@ -85,6 +186,10 @@ def select_posts(posts: list[dict[str, Any]], date_range: str | None, post_limit
     for post in posts:
         timestamp = parse_timestamp(post.get("timestamp"))
         if timestamp is None:
+            # Undated items are kept only when no window was requested; some
+            # actors report relative dates that cannot be placed on a timeline.
+            if start is None and end is None:
+                selected.append(post)
             continue
         if (start is None or timestamp >= start) and (end is None or timestamp <= end):
             selected.append(post)
@@ -125,6 +230,10 @@ def average_engagement_rate(posts: list[dict[str, Any]]) -> float:
 
 
 def _nonnegative_int(value: Any) -> int:
+    if isinstance(value, str):
+        # The YouTube actor reports some counts as display strings ("1,234 views").
+        digits = "".join(char for char in value if char.isdigit())
+        value = digits or 0
     try:
         return max(0, int(value or 0))
     except (TypeError, ValueError):
@@ -139,6 +248,11 @@ def _iso_timestamp(value: Any) -> str | None:
 def parse_timestamp(value: Any) -> datetime | None:
     if not value:
         return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:

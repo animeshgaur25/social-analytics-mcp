@@ -9,6 +9,7 @@ from typing import Any
 
 from .errors import ChartRenderingError, InvalidRequestError, NoDataError
 from .insights import clean_caption
+from .platforms import PlatformSpec, resolve_platform
 
 SUPPORTED_METRICS = {
     "follower_growth",
@@ -40,7 +41,9 @@ class ChartGenerator:
         follower_history: list[dict[str, Any]],
         chart_type: str | None,
         top_n: int,
+        platform: str = "instagram",
     ) -> tuple[Any, str]:
+        spec = resolve_platform(platform)
         metric = metric.strip().lower()
         if metric not in SUPPORTED_METRICS:
             raise InvalidRequestError(
@@ -54,13 +57,13 @@ class ChartGenerator:
 
         go = self._plotly()
         if metric == "follower_growth":
-            figure = self._follower_growth(go, username, follower_history, resolved_chart_type)
+            figure = self._follower_growth(go, username, follower_history, resolved_chart_type, spec)
         elif metric == "engagement_rate_over_time":
-            figure = self._engagement_over_time(go, username, posts, resolved_chart_type)
+            figure = self._engagement_over_time(go, username, posts, resolved_chart_type, spec)
         elif metric == "top_posts_by_engagement":
-            figure = self._top_posts(go, username, posts, resolved_chart_type, top_n)
+            figure = self._top_posts(go, username, posts, resolved_chart_type, top_n, spec)
         else:
-            figure = self._content_types(go, username, posts, resolved_chart_type)
+            figure = self._content_types(go, username, posts, resolved_chart_type, spec)
 
         figure.update_layout(
             template="plotly_white",
@@ -104,6 +107,7 @@ class ChartGenerator:
         chart_type: str | None,
         top_n: int,
         output: str = "png",   # "png" | "spec" | "both"
+        platform: str = "instagram",
     ) -> dict[str, Any]:
         figure, resolved_chart_type = self.build_figure(
             username=username,
@@ -112,6 +116,7 @@ class ChartGenerator:
             follower_history=follower_history,
             chart_type=chart_type,
             top_n=top_n,
+            platform=platform,
         )
 
         result: dict[str, Any] = {
@@ -146,21 +151,25 @@ class ChartGenerator:
         return go
 
     @staticmethod
-    def _follower_growth(go: Any, username: str, history: list[dict[str, Any]], chart_type: str) -> Any:
+    def _follower_growth(
+        go: Any, username: str, history: list[dict[str, Any]], chart_type: str, spec: PlatformSpec
+    ) -> Any:
+        audience = spec.audience_noun
         if len(history) < 2:
             raise NoDataError(
-                "Follower growth needs at least two fresh profile snapshots. "
-                "This Apify actor supplies the current follower count only; run the profile tool again "
-                "after time has passed, or connect a historical source."
+                f"{audience} growth needs at least two fresh {spec.account_noun} snapshots. "
+                f"This Apify actor supplies the current {audience.lower()} count only; run the profile tool "
+                "again after time has passed, or connect a historical source."
             )
         x = [entry["timestamp"] for entry in history]
         y = [entry["followers"] for entry in history]
+        hovertemplate = f"<b>%{{x}}</b><br>{audience}: %{{y:,}}<extra></extra>"
         if chart_type == "bar":
             trace = go.Bar(
                 x=x,
                 y=y,
                 marker=dict(color="#6366f1", cornerradius=8),
-                hovertemplate="<b>%{x}</b><br>Followers: %{y:,}<extra></extra>",
+                hovertemplate=hovertemplate,
             )
         else:
             trace = go.Scatter(
@@ -171,23 +180,27 @@ class ChartGenerator:
                 marker=dict(size=8, color="#6366f1", line=dict(width=2, color="#ffffff")),
                 fill="tozeroy",
                 fillcolor="rgba(99, 102, 241, 0.10)",
-                hovertemplate="<b>%{x}</b><br>Followers: %{y:,}<extra></extra>",
+                hovertemplate=hovertemplate,
             )
         figure = go.Figure(trace)
         figure.update_layout(
             title=dict(
-                text=f"<b>@{username}</b> · Follower Growth History<br><span style='font-size:12px;color:#64748b;'>Session-tracked follower count checkpoints</span>",
+                text=f"<b>@{username}</b> · {audience} Growth History<br><span style='font-size:12px;color:#64748b;'>Session-tracked {audience.lower()} count checkpoints</span>",
                 font=dict(size=18, color="#0f172a"),
             ),
         )
-        figure.update_yaxes(title="Followers", tickformat=",")
+        figure.update_yaxes(title=audience, tickformat=",")
         return figure
 
     @staticmethod
-    def _engagement_over_time(go: Any, username: str, posts: list[dict[str, Any]], chart_type: str) -> Any:
+    def _engagement_over_time(
+        go: Any, username: str, posts: list[dict[str, Any]], chart_type: str, spec: PlatformSpec
+    ) -> Any:
         ordered = sorted(posts, key=lambda post: post["timestamp"] or "")
         if not ordered:
-            raise NoDataError("No dated posts matched this range, so engagement cannot be charted.")
+            raise NoDataError(
+                f"No dated {spec.item_noun_plural} matched this range, so engagement cannot be charted."
+            )
         x = [post["timestamp"][:10] if post.get("timestamp") else "N/A" for post in ordered]
         y = [post["engagement_rate_percent"] for post in ordered]
         avg_rate = sum(y) / len(y)
@@ -195,7 +208,8 @@ class ChartGenerator:
         hover = [
             f"<b>{clean_caption(post.get('caption'), max_length=40)}</b><br>"
             f"Format: {post['media_type'].title()}<br>"
-            f"Likes: {post['likes']:,} · Comments: {post['comments']:,}<br>"
+            + (f"Views: {post['views']:,}<br>" if post.get("views") else "")
+            + f"Likes: {post['likes']:,} · Comments: {post['comments']:,}<br>"
             f"Engagement Rate: <b>{post['engagement_rate_percent']:.2f}%</b>"
             for post in ordered
         ]
@@ -209,7 +223,7 @@ class ChartGenerator:
                     marker=dict(color="#0284c7", cornerradius=8),
                     customdata=hover,
                     hovertemplate="%{customdata}<extra></extra>",
-                    name="Post Rate",
+                    name=f"{spec.item_noun.title()} Rate",
                 )
             )
         else:
@@ -241,7 +255,7 @@ class ChartGenerator:
 
         figure.update_layout(
             title=dict(
-                text=f"<b>@{username}</b> · Engagement Rate Over Time<br><span style='font-size:12px;color:#64748b;'>Calculated as (likes + comments) / followers per post</span>",
+                text=f"<b>@{username}</b> · Engagement Rate Over Time<br><span style='font-size:12px;color:#64748b;'>Calculated as (likes + comments) / {spec.engagement_basis} per {spec.item_noun}</span>",
                 font=dict(size=18, color="#0f172a"),
             ),
         )
@@ -250,10 +264,19 @@ class ChartGenerator:
         return figure
 
     @staticmethod
-    def _top_posts(go: Any, username: str, posts: list[dict[str, Any]], chart_type: str, top_n: int) -> Any:
+    def _top_posts(
+        go: Any,
+        username: str,
+        posts: list[dict[str, Any]],
+        chart_type: str,
+        top_n: int,
+        spec: PlatformSpec,
+    ) -> Any:
         ranked = sorted(posts, key=lambda post: post["engagement"], reverse=True)[:top_n]
         if not ranked:
-            raise NoDataError("No posts matched this range, so top posts cannot be charted.")
+            raise NoDataError(
+                f"No {spec.item_noun_plural} matched this range, so top {spec.item_noun_plural} cannot be charted."
+            )
 
         # Show short length caption on axis instead of hash id!
         labels = [clean_caption(post.get("caption"), max_length=24) for post in ranked]
@@ -261,7 +284,8 @@ class ChartGenerator:
         hover = [
             f"<b>{clean_caption(post.get('caption'), max_length=50)}</b><br>"
             f"Format: {post['media_type'].title()}<br>"
-            f"Likes: {post['likes']:,} · Comments: {post['comments']:,}<br>"
+            + (f"Views: {post['views']:,}<br>" if post.get("views") else "")
+            + f"Likes: {post['likes']:,} · Comments: {post['comments']:,}<br>"
             f"Total Engagement: <b>{post['engagement']:,}</b><br>"
             f"Engagement Rate: <b>{post['engagement_rate_percent']:.2f}%</b>"
             for post in ranked
@@ -293,16 +317,18 @@ class ChartGenerator:
         figure = go.Figure(trace)
         figure.update_layout(
             title=dict(
-                text=f"<b>@{username}</b> · Top {len(ranked)} Posts by Engagement<br><span style='font-size:12px;color:#64748b;'>Ranked by total likes + comments (labeled by caption snippet)</span>",
+                text=f"<b>@{username}</b> · Top {len(ranked)} {spec.item_noun_plural.title()} by Engagement<br><span style='font-size:12px;color:#64748b;'>Ranked by total likes + comments (labeled by {spec.caption_noun.lower()} snippet)</span>",
                 font=dict(size=18, color="#0f172a"),
             ),
         )
         figure.update_yaxes(title="Likes + comments", tickformat=",")
-        figure.update_xaxes(title="Post (Caption snippet)")
+        figure.update_xaxes(title=f"{spec.item_noun.title()} ({spec.caption_noun} snippet)")
         return figure
 
     @staticmethod
-    def _content_types(go: Any, username: str, posts: list[dict[str, Any]], chart_type: str) -> Any:
+    def _content_types(
+        go: Any, username: str, posts: list[dict[str, Any]], chart_type: str, spec: PlatformSpec
+    ) -> Any:
         groups: dict[str, list[float]] = {}
         counts: dict[str, int] = {}
         for post in posts:
@@ -311,13 +337,15 @@ class ChartGenerator:
             counts[m_type] = counts.get(m_type, 0) + 1
 
         if not groups:
-            raise NoDataError("No posts matched this range, so content types cannot be compared.")
+            raise NoDataError(
+                f"No {spec.item_noun_plural} matched this range, so content types cannot be compared."
+            )
 
         labels = sorted(groups)
         values = [sum(groups[label]) / len(groups[label]) for label in labels]
         hover = [
             f"<b>{label}</b><br>"
-            f"Posts Analyzed: {counts[label]}<br>"
+            f"{spec.item_noun_plural.title()} Analyzed: {counts[label]}<br>"
             f"Average Engagement Rate: <b>{val:.2f}%</b>"
             for label, val in zip(labels, values)
         ]
@@ -347,7 +375,7 @@ class ChartGenerator:
         figure = go.Figure(trace)
         figure.update_layout(
             title=dict(
-                text=f"<b>@{username}</b> · Average Engagement by Content Type<br><span style='font-size:12px;color:#64748b;'>Comparison of Reels, Carousels, Static Images, and Videos</span>",
+                text=f"<b>@{username}</b> · Average Engagement by Content Type<br><span style='font-size:12px;color:#64748b;'>{spec.formats_blurb}</span>",
                 font=dict(size=18, color="#0f172a"),
             ),
         )

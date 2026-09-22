@@ -20,9 +20,11 @@ load_dotenv()
 mcp = FastMCP(
     "social-analytics-mcp",
     instructions=(
-        "Analyse public Instagram profiles with Apify data. Use list_available_metrics before "
-        "selecting a dashboard metric. Responses contain modern interactive Plotly charts, "
-        "base64 PNGs, formatted Markdown data tables, and AI performance insights."
+        "Analyse public Instagram profiles and YouTube channels with Apify data. Every tool takes "
+        "platform='instagram' (default) or platform='youtube'; for YouTube pass a channel handle or "
+        "URL such as '@MrBeast'. Use list_available_metrics before selecting a dashboard metric. "
+        "Responses contain modern interactive Plotly charts, base64 PNGs, formatted Markdown data "
+        "tables, and AI performance insights."
     ),
     # stdio ignores these settings. Cloud Run uses the HTTP transport below and
     # requires a process that binds to $PORT on all container interfaces.
@@ -148,7 +150,7 @@ async def root_dashboard(request: Request) -> HTMLResponse:
   <div class="container">
     <div class="badge"><span class="badge-dot"></span> Live on Google Cloud Run</div>
     <h1>Social Analytics MCP Server</h1>
-    <p class="lead">Interactive Model Context Protocol (MCP) server providing Instagram profile analytics, automated charts, tables, and AI insights.</p>
+    <p class="lead">Interactive Model Context Protocol (MCP) server providing Instagram profile and YouTube channel analytics, automated charts, tables, and AI insights.</p>
     
     <div class="stats-grid">
       <div class="stat-card">
@@ -213,15 +215,21 @@ async def stats_endpoint(request: Request) -> JSONResponse:
 
 
 @mcp.tool()
-async def get_profile_summary(username: str, ctx: Context | None = None) -> dict:
-    """Return public profile bio and headline counts for an Instagram username."""
+async def get_profile_summary(
+    username: str, platform: str = "instagram", ctx: Context | None = None
+) -> dict:
+    """Return public bio and headline counts for an Instagram username or YouTube channel.
+
+    platform: 'instagram' (default) or 'youtube'. For YouTube, username accepts a
+    handle such as '@MrBeast', a channel URL, or a UC… channel ID.
+    """
     start = time.monotonic()
     client_id = getattr(ctx, "client_id", None) if ctx else None
-    result = await asyncio.to_thread(tools.get_profile_summary, username)
+    result = await asyncio.to_thread(tools.get_profile_summary, username, platform)
     duration_ms = (time.monotonic() - start) * 1000
     tracker.record_call(
         "get_profile_summary",
-        {"username": username},
+        {"username": username, "platform": platform},
         bool(result.get("ok")),
         duration_ms,
         client_id=client_id,
@@ -235,20 +243,25 @@ async def get_engagement_metrics(
     username: str,
     date_range: str | None = None,
     post_limit: int = 12,
+    platform: str = "instagram",
     ctx: Context | None = None,
 ) -> dict:
-    """Return per-post likes, comments, media type, and engagement rates.
+    """Return per-item likes, comments, media type, and engagement rates.
 
+    platform: 'instagram' (default) or 'youtube'. YouTube rows also carry view
+    counts, and engagement rate is measured against views rather than followers.
     date_range accepts all, a trailing day range such as 30d, or an inclusive
     ISO range such as 2026-01-01:2026-01-31.
     """
     start = time.monotonic()
     client_id = getattr(ctx, "client_id", None) if ctx else None
-    result = await asyncio.to_thread(tools.get_engagement_metrics, username, date_range, post_limit)
+    result = await asyncio.to_thread(
+        tools.get_engagement_metrics, username, date_range, post_limit, platform
+    )
     duration_ms = (time.monotonic() - start) * 1000
     tracker.record_call(
         "get_engagement_metrics",
-        {"username": username, "date_range": date_range, "post_limit": post_limit},
+        {"username": username, "date_range": date_range, "post_limit": post_limit, "platform": platform},
         bool(result.get("ok")),
         duration_ms,
         client_id=client_id,
@@ -266,23 +279,31 @@ async def generate_dashboard(
     top_n: int = 5,
     ctx: Context | None = None,
     output: str = "png",
+    platform: str = "instagram",
 ) -> dict:
-    """Generate a light-theme social-performance dashboard for a public profile.
+    """Generate a light-theme social-performance dashboard for a public account.
 
-    metric: follower_growth, engagement_rate_over_time,
-    top_posts_by_engagement, or content_type_comparison. chart_type may be line
-    or bar; omitted selects the most appropriate chart. The response contains
-    a base64 PNG and an interactive Plotly JSON specification.
+    platform: 'instagram' (default) or 'youtube'. metric: follower_growth,
+    engagement_rate_over_time, top_posts_by_engagement, content_type_comparison,
+    or 'all' for the full audit. chart_type may be line or bar; omitted selects
+    the most appropriate chart. The response contains a base64 PNG and an
+    interactive Plotly JSON specification.
     """
     start = time.monotonic()
     client_id = getattr(ctx, "client_id", None) if ctx else None
     result = await asyncio.to_thread(
-        tools.generate_dashboard, username, metric, chart_type, date_range, top_n, output
+        tools.generate_dashboard, username, metric, chart_type, date_range, top_n, output, platform
     )
     duration_ms = (time.monotonic() - start) * 1000
     tracker.record_call(
         "generate_dashboard",
-        {"username": username, "metric": metric, "chart_type": chart_type, "date_range": date_range},
+        {
+            "username": username,
+            "metric": metric,
+            "chart_type": chart_type,
+            "date_range": date_range,
+            "platform": platform,
+        },
         bool(result.get("ok")),
         duration_ms,
         client_id=client_id,
@@ -299,28 +320,36 @@ async def audit_profile(
     top_n: int = 5,
     ctx: Context | None = None,
     output: str = "png",
+    platform: str = "instagram",
 ) -> dict:
-    """Run a full, single-call performance audit for an Instagram profile.
+    """Run a full, single-call performance audit for an Instagram profile or YouTube channel.
 
     Combines:
-    1. Public profile stats and authority ratio.
-    2. Ranked top posts bar chart with caption snippet labels.
-    3. 90-day / chronological engagement rate trajectory line chart.
-    4. Content-type breakdown (Reels vs Carousels vs Photos) comparison chart.
-    5. Formatted Markdown tables for posts and format distributions.
+    1. Public account stats (authority ratio on Instagram, lifetime views on YouTube).
+    2. Ranked top posts/videos bar chart with caption or title snippet labels.
+    3. Chronological engagement rate trajectory line chart.
+    4. Content-type breakdown (Reels vs Carousels vs Photos, or Shorts vs long-form).
+    5. Formatted Markdown tables for items and format distributions.
     6. Actionable AI key takeaways and tactical recommendations.
 
+    platform: 'instagram' (default) or 'youtube'.
     output: 'png' for base64 images, 'spec' for interactive Plotly JSON specs, or 'both'.
     """
     start = time.monotonic()
     client_id = getattr(ctx, "client_id", None) if ctx else None
     result = await asyncio.to_thread(
-        tools.audit_profile, username, date_range, post_limit, top_n, output
+        tools.audit_profile, username, date_range, post_limit, top_n, output, platform
     )
     duration_ms = (time.monotonic() - start) * 1000
     tracker.record_call(
         "audit_profile",
-        {"username": username, "date_range": date_range, "post_limit": post_limit, "top_n": top_n},
+        {
+            "username": username,
+            "date_range": date_range,
+            "post_limit": post_limit,
+            "top_n": top_n,
+            "platform": platform,
+        },
         bool(result.get("ok")),
         duration_ms,
         client_id=client_id,
@@ -331,15 +360,18 @@ async def audit_profile(
 
 
 @mcp.tool()
-def list_available_metrics(ctx: Context | None = None) -> dict:
-    """List supported Instagram dashboard metrics, chart types, and data limits."""
+def list_available_metrics(platform: str = "instagram", ctx: Context | None = None) -> dict:
+    """List supported dashboard metrics, chart types, and data limits for a platform.
+
+    platform: 'instagram' (default) or 'youtube'.
+    """
     start = time.monotonic()
     client_id = getattr(ctx, "client_id", None) if ctx else None
-    result = tools.list_available_metrics()
+    result = tools.list_available_metrics(platform)
     duration_ms = (time.monotonic() - start) * 1000
     tracker.record_call(
         "list_available_metrics",
-        {},
+        {"platform": platform},
         bool(result.get("ok")),
         duration_ms,
         client_id=client_id,

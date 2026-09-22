@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .platforms import resolve_platform
+
 
 def clean_caption(caption: str | None, max_length: int = 35) -> str:
     """Format and truncate post captions cleanly for labels and tables."""
@@ -18,9 +20,13 @@ def clean_caption(caption: str | None, max_length: int = 35) -> str:
     return cleaned or "Untitled Post"
 
 
-def build_posts_table(posts: list[dict[str, Any]], limit: int | None = None) -> tuple[str, list[dict[str, Any]]]:
+def build_posts_table(
+    posts: list[dict[str, Any]], limit: int | None = None, platform: str = "instagram"
+) -> tuple[str, list[dict[str, Any]]]:
     """Generate both a Markdown table string and structured row dicts for posts."""
+    spec = resolve_platform(platform)
     subset = posts[:limit] if limit else posts
+    show_views = any(post.get("views") for post in subset)
     rows: list[dict[str, Any]] = []
 
     for idx, post in enumerate(subset, start=1):
@@ -32,7 +38,7 @@ def build_posts_table(posts: list[dict[str, Any]], limit: int | None = None) -> 
         total_eng = int(post.get("engagement") or (likes + comments))
         rate_pct = float(post.get("engagement_rate_percent") or 0.0)
 
-        rows.append({
+        row = {
             "rank": idx,
             "caption": caption_short,
             "full_caption": post.get("caption") or "",
@@ -44,30 +50,39 @@ def build_posts_table(posts: list[dict[str, Any]], limit: int | None = None) -> 
             "date": date_str,
             "url": post.get("url") or "",
             "shortcode": post.get("shortcode") or "",
-        })
+        }
+        if show_views:
+            row["views"] = int(post.get("views") or 0)
+        rows.append(row)
 
-    # Build Markdown table
+    views_header = " Views |" if show_views else ""
+    views_divider = "---|" if show_views else ""
     md_lines = [
-        "| # | Post Caption | Type | Likes | Comments | Total Eng. | Eng. Rate | Date |",
-        "|---|---|---|---|---|---|---|---|",
+        f"| # | {spec.item_noun.title()} {spec.caption_noun} | Type |{views_header} Likes | Comments | Total Eng. | Eng. Rate | Date |",
+        f"|---|---|---|{views_divider}---|---|---|---|---|",
     ]
     for r in rows:
+        views_cell = f" {r['views']:,} |" if show_views else ""
         md_lines.append(
-            f"| {r['rank']} | {r['caption']} | {r['media_type']} | {r['likes']:,} | {r['comments']:,} | {r['total_engagement']:,} | {r['engagement_rate_percent']:.2f}% | {r['date']} |"
+            f"| {r['rank']} | {r['caption']} | {r['media_type']} |{views_cell} {r['likes']:,} | {r['comments']:,} | {r['total_engagement']:,} | {r['engagement_rate_percent']:.2f}% | {r['date']} |"
         )
     markdown_table = "\n".join(md_lines)
 
     return markdown_table, rows
 
 
-def build_content_type_table(posts: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-    """Summarize performance by content type (reel, carousel, image, video)."""
+def build_content_type_table(
+    posts: list[dict[str, Any]], platform: str = "instagram"
+) -> tuple[str, list[dict[str, Any]]]:
+    """Summarize performance by content type (reel, carousel, image, video, short)."""
+    spec = resolve_platform(platform)
     groups: dict[str, list[dict[str, Any]]] = {}
     for post in posts:
         groups.setdefault(post.get("media_type", "image"), []).append(post)
 
     rows: list[dict[str, Any]] = []
     total_posts = len(posts) or 1
+    show_views = any(post.get("views") for post in posts)
 
     for media_type, items in sorted(groups.items(), key=lambda x: len(x[1]), reverse=True):
         count = len(items)
@@ -76,22 +91,28 @@ def build_content_type_table(posts: list[dict[str, Any]]) -> tuple[str, list[dic
         avg_rate = sum(float(p.get("engagement_rate_percent", 0.0)) for p in items) / count
         share = (count / total_posts) * 100
 
-        rows.append({
+        row = {
             "content_type": media_type.title(),
             "posts_count": count,
             "share_of_posts_percent": round(share, 1),
             "average_likes": round(avg_likes, 1),
             "average_comments": round(avg_comments, 1),
             "average_engagement_rate_percent": round(avg_rate, 3),
-        })
+        }
+        if show_views:
+            row["average_views"] = round(sum(int(p.get("views", 0)) for p in items) / count, 1)
+        rows.append(row)
 
+    views_header = " Avg Views |" if show_views else ""
+    views_divider = "---|" if show_views else ""
     md_lines = [
-        "| Content Type | Posts | Share | Avg Likes | Avg Comments | Avg Eng. Rate |",
-        "|---|---|---|---|---|---|",
+        f"| Content Type | {spec.item_noun_plural.title()} | Share |{views_header} Avg Likes | Avg Comments | Avg Eng. Rate |",
+        f"|---|---|---|{views_divider}---|---|---|",
     ]
     for r in rows:
+        views_cell = f" {r['average_views']:,.0f} |" if show_views else ""
         md_lines.append(
-            f"| {r['content_type']} | {r['posts_count']} | {r['share_of_posts_percent']}% | {r['average_likes']:,.0f} | {r['average_comments']:,.0f} | {r['average_engagement_rate_percent']:.2f}% |"
+            f"| {r['content_type']} | {r['posts_count']} | {r['share_of_posts_percent']}% |{views_cell} {r['average_likes']:,.0f} | {r['average_comments']:,.0f} | {r['average_engagement_rate_percent']:.2f}% |"
         )
     markdown_table = "\n".join(md_lines)
 
@@ -103,16 +124,21 @@ def generate_post_insights(
     posts: list[dict[str, Any]],
     followers: int,
     metric: str | None = None,
+    platform: str = "instagram",
 ) -> dict[str, Any]:
     """Generate high-value analytical takeaways and recommendations from posts."""
+    spec = resolve_platform(platform)
+    item = spec.item_noun
+    items = spec.item_noun_plural
     if not posts:
         return {
-            "key_takeaways": ["No post data available for the selected timeframe."],
-            "recommendations": ["Expand the date range to capture recent posts."],
+            "key_takeaways": [f"No {item} data available for the selected timeframe."],
+            "recommendations": [f"Expand the date range to capture recent {items}."],
         }
 
     total_likes = sum(int(p.get("likes", 0)) for p in posts)
     total_comments = sum(int(p.get("comments", 0)) for p in posts)
+    total_views = sum(int(p.get("views", 0)) for p in posts)
     avg_rate = sum(float(p.get("engagement_rate_percent", 0.0)) for p in posts) / len(posts)
 
     # Top post by engagement
@@ -145,27 +171,45 @@ def generate_post_insights(
             elif diff_pct < -10:
                 trend_description = f"trending downwards ({diff_pct:.1f}% recently)"
 
+    volume = f"{total_likes:,} likes, {total_comments:,} comments"
+    if total_views:
+        volume = f"{total_views:,} views, {volume}"
+
     takeaways = [
-        f"**Average Engagement:** @{username}'s posts average **{avg_rate:.2f}%** engagement rate across {len(posts)} analyzed posts ({total_likes:,} likes, {total_comments:,} comments).",
-        f"**Top Performing Post:** '{top_caption}' generated **{top_eng:,}** engagements ({top_rate:.2f}% engagement rate).",
-        f"**Winning Format:** **{best_type_name}s** are the highest performing media format, delivering an average engagement rate of **{best_type_avg:.2f}%**.",
+        f"**Average Engagement:** @{username}'s {items} average **{avg_rate:.2f}%** engagement rate "
+        f"(likes + comments / {spec.engagement_basis}) across {len(posts)} analyzed {items} ({volume}).",
+        f"**Top Performing {item.title()}:** '{top_caption}' generated **{top_eng:,}** engagements ({top_rate:.2f}% engagement rate).",
+        f"**Winning Format:** **{best_type_name}s** are the highest performing format, delivering an average engagement rate of **{best_type_avg:.2f}%**.",
         f"**Engagement Trajectory:** Audience interaction is currently **{trend_description}** across the analyzed period.",
     ]
 
-    recommendations = [
-        f"Double down on **{best_type_name}** content to maximize algorithmic distribution and organic reach.",
-        f"Analyze the hook and visual style of the top post ('{top_caption}') and replicate its structure across upcoming campaigns.",
-        "Maintain active community replies in the first 2 hours of posting to boost comment velocity and explore page discovery.",
-    ]
+    if spec.id == "youtube":
+        recommendations = [
+            f"Double down on **{best_type_name}** content — it converts views into likes and comments at the highest rate.",
+            f"Reuse the title and thumbnail pattern from '{top_caption}', which drove the strongest engagement of the analyzed window.",
+            "Pin a comment and reply within the first hour of publishing to lift comment velocity, which feeds YouTube's suggested-video ranking.",
+        ]
+    else:
+        recommendations = [
+            f"Double down on **{best_type_name}** content to maximize algorithmic distribution and organic reach.",
+            f"Analyze the hook and visual style of the top {item} ('{top_caption}') and replicate its structure across upcoming campaigns.",
+            "Maintain active community replies in the first 2 hours of posting to boost comment velocity and explore page discovery.",
+        ]
+
+    benchmark = {
+        "average_engagement_rate_percent": round(avg_rate, 3),
+        "top_engagement_rate_percent": round(top_rate, 3),
+        "total_engagements": total_likes + total_comments,
+        "winning_media_type": best_type_name,
+        "engagement_rate_basis": spec.engagement_basis,
+    }
+    if total_views:
+        benchmark["total_views"] = total_views
+        benchmark["average_views"] = round(total_views / len(posts), 1)
 
     return {
-        "summary": f"Analyzed {len(posts)} posts for @{username}. Overall engagement averages {avg_rate:.2f}%. Best format is {best_type_name}.",
+        "summary": f"Analyzed {len(posts)} {items} for @{username}. Overall engagement averages {avg_rate:.2f}%. Best format is {best_type_name}.",
         "key_takeaways": takeaways,
         "recommendations": recommendations,
-        "benchmark": {
-            "average_engagement_rate_percent": round(avg_rate, 3),
-            "top_engagement_rate_percent": round(top_rate, 3),
-            "total_engagements": total_likes + total_comments,
-            "winning_media_type": best_type_name,
-        },
+        "benchmark": benchmark,
     }

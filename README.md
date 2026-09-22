@@ -1,8 +1,25 @@
 # social-analytics-mcp
 
-`social-analytics-mcp` is a production-grade Python Model Context Protocol (MCP) server for querying Instagram performance analytics, generating interactive Plotly dashboards, rendering structured markdown data tables, and delivering actionable audience insights—all without opening Instagram.
+`social-analytics-mcp` is a production-grade Python Model Context Protocol (MCP) server for querying **Instagram and YouTube** performance analytics, generating interactive Plotly dashboards, rendering structured markdown data tables, and delivering actionable audience insights—all without opening a browser.
 
-It uses Apify's `apify/instagram-profile-scraper` actor for retrieving public profile and post metadata, computes metrics locally, and produces interactive Plotly visualisations (with lightweight PNG fallback rendering via Kaleido).
+It uses Apify's `apify/instagram-profile-scraper` actor for public Instagram profile and post metadata, and `streamers/youtube-scraper` for public YouTube channel, video, and Shorts metadata. Metrics are computed locally and rendered as interactive Plotly visualisations (with PNG fallback rendering via Kaleido).
+
+---
+
+## Platforms
+
+Every analytics tool takes a `platform` argument: `"instagram"` (default) or `"youtube"`.
+
+| | Instagram | YouTube |
+| --- | --- | --- |
+| Account input | `eminem`, `@eminem`, or a profile URL | `@MrBeast`, a channel URL, or a `UC…` channel ID |
+| Actor | `apify/instagram-profile-scraper` | `streamers/youtube-scraper` |
+| Audience metric | Followers | Subscribers |
+| Content items | Posts (Reels, Carousels, Images, Videos) | Videos (long-form, Shorts, Livestreams) |
+| Engagement rate | `(likes + comments) / followers` | `(likes + comments) / views` |
+| Extra fields | Follower-to-following authority ratio | Per-video view counts, lifetime channel views |
+
+YouTube engagement rate is measured against **views** rather than subscribers, which is the industry convention — subscriber count is only used as a fallback when the actor withholds a view count.
 
 ---
 
@@ -10,19 +27,19 @@ It uses Apify's `apify/instagram-profile-scraper` actor for retrieving public pr
 
 | Tool | Parameters | Purpose & Output |
 | --- | --- | --- |
-| `audit_profile` | `username`, `date_range`, `post_limit`, `top_n`, `output` | **All-in-one comprehensive audit**: returns profile stats, authority ratio, all 3 dashboard views (top posts, engagement trajectory, content types) with charts, formatted markdown tables, and AI recommendations in a single call. |
-| `get_profile_summary` | `username` | Returns follower, following, and post counts, verification status, ratio authority analysis, and a structured Markdown summary table. |
-| `get_engagement_metrics` | `username`, `date_range`, `post_limit` | Returns post-level metrics (likes, comments, media type, engagement rate), a sorted Markdown post table, and content-type breakdowns. |
-| `generate_dashboard` | `username`, `metric`, `chart_type`, `date_range`, `top_n`, `output` | Generates a styled light-theme dashboard. Supports `output="png"`, `"spec"` (Plotly JSON), or `"both"`. Use `metric="all"` to trigger the full profile audit. |
-| `list_available_metrics` | _none_ | Lists supported metrics (`engagement_rate_over_time`, `top_posts_by_engagement`, `content_type_comparison`, `follower_growth`, `all`), default chart types, and operational bounds. |
+| `audit_profile` | `username`, `date_range`, `post_limit`, `top_n`, `output`, `platform` | **All-in-one comprehensive audit**: returns account stats, all 3 dashboard views (top posts/videos, engagement trajectory, content types) with charts, formatted markdown tables, and AI recommendations in a single call. |
+| `get_profile_summary` | `username`, `platform` | Returns audience, following, and item counts, verification status, authority/lifetime-views analysis, and a structured Markdown summary table. |
+| `get_engagement_metrics` | `username`, `date_range`, `post_limit`, `platform` | Returns item-level metrics (likes, comments, views on YouTube, media type, engagement rate), a sorted Markdown table, and content-type breakdowns. |
+| `generate_dashboard` | `username`, `metric`, `chart_type`, `date_range`, `top_n`, `output`, `platform` | Generates a styled light-theme dashboard. Supports `output="png"`, `"spec"` (Plotly JSON), or `"both"`. Use `metric="all"` to trigger the full audit. |
+| `list_available_metrics` | `platform` | Lists supported metrics (`engagement_rate_over_time`, `top_posts_by_engagement`, `content_type_comparison`, `follower_growth`, `all`), default chart types, and operational bounds for that platform. |
 
 ### Dashboard Metrics & Outputs
 
 - **`all` / `audit_profile`**: Full 360-degree account audit returning all three chart views below, two data tables, and an executive markdown report in one call.
-- **`top_posts_by_engagement`**: Bar chart ranking top posts labeled with truncated caption snippets.
-- **`engagement_rate_over_time`**: Line chart showing engagement trajectory across chronological posts.
-- **`content_type_comparison`**: Bar chart comparing average engagement by format (Reels, Carousels, Images, Videos).
-- **`follower_growth`**: Line chart displaying session-tracked follower growth across fetches.
+- **`top_posts_by_engagement`**: Bar chart ranking top posts/videos labeled with truncated caption or title snippets.
+- **`engagement_rate_over_time`**: Line chart showing engagement trajectory across chronological posts/videos.
+- **`content_type_comparison`**: Bar chart comparing average engagement by format (Reels, Carousels, Images, Videos on Instagram; Shorts, long-form Videos, Livestreams on YouTube).
+- **`follower_growth`**: Line chart displaying session-tracked follower/subscriber growth across fetches.
 
 
 Each dashboard call returns:
@@ -61,7 +78,7 @@ cp .env.example .env
 Edit `.env` and set your credentials:
 
 ```bash
-# Required: Apify token for Instagram scraping
+# Required: Apify token for Instagram and YouTube scraping
 APIFY_API_TOKEN=your_apify_token_here
 
 # Optional: Gemini API Key for AI-powered caption critique & influencer reports
@@ -71,7 +88,14 @@ GEMINI_API_KEY=your_gemini_api_key_here
 APIFY_POLL_INTERVAL_SECONDS=2
 APIFY_RUN_TIMEOUT_SECONDS=180
 PROFILE_CACHE_TTL_SECONDS=900
+
+# Optional: YouTube actor and per-run item budget (these drive Apify credit usage)
+APIFY_YOUTUBE_ACTOR_ID=streamers/youtube-scraper
+YOUTUBE_MAX_VIDEOS=20
+YOUTUBE_MAX_SHORTS=10
 ```
+
+`YOUTUBE_MAX_VIDEOS` and `YOUTUBE_MAX_SHORTS` cap how many items each channel run pulls. Both formats are fetched so that `content_type_comparison` can contrast Shorts against long-form; set `YOUTUBE_MAX_SHORTS=0` to skip Shorts and halve the credit cost.
 
 > **Note on Kaleido**: PNG export utilizes Kaleido 1.x. If Chromium is not automatically detected on your system, run `plotly_get_chrome` to install a local headless Chromium build.
 
@@ -183,6 +207,44 @@ social-analytics dashboard cristiano engagement_rate_over_time --output png --pn
 social-analytics dashboard cristiano content_type_comparison --output both
 ```
 
+---
+
+## YouTube Usage
+
+Add `--platform youtube` to any command and pass a channel handle, URL, or `UC…` ID:
+
+```bash
+# Channel summary: subscribers, lifetime views, video count
+social-analytics profile @MrBeast --platform youtube
+
+# Per-video metrics including view counts
+social-analytics engagement @MrBeast --platform youtube --post-limit 12
+
+# Full 360 audit with all three charts
+social-analytics audit @MrBeast --platform youtube --output spec
+
+# Shorts vs long-form engagement comparison
+social-analytics dashboard @MrBeast content_type_comparison --platform youtube --output both
+```
+
+*Sample audit output:*
+
+```text
+# Performance Audit: @MrBeast (MrBeast) · YouTube
+**Subscribers:** 518,000,000 | **Lifetime views:** 140,603,012,575 | **Videos:** 1,003 | **Verified:** Yes
+
+## 2. Content-Type Breakdown
+| Content Type | Videos | Share | Avg Views | Avg Likes | Avg Comments | Avg Eng. Rate |
+|---|---|---|---|---|---|---|
+| Video | 8 | 66.7% | 95,438,088 | 1,912,500 | 104,782 | 2.22% |
+| Short | 4 | 33.3% | 44,162,020 | 1,236,750 | 44,547 | 2.99% |
+```
+
+From an MCP client, the same thing is a `platform` argument:
+
+```json
+{ "name": "audit_profile", "arguments": { "username": "@MrBeast", "platform": "youtube" } }
+```
 
 ---
 

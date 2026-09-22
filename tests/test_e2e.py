@@ -109,6 +109,38 @@ async def run_live_smoke_test() -> None:
             assert "audit_markdown_report" in audit
             print("✓ audit_profile returned all 3 views and consolidated markdown report")
 
+            channel = os.getenv("SMOKE_YOUTUBE_CHANNEL")
+            if not channel:
+                print("· skipping YouTube leg (set SMOKE_YOUTUBE_CHANNEL=@handle to include it)")
+                return
+
+            require_ok(
+                "get_profile_summary (youtube)",
+                as_dict(
+                    await session.call_tool(
+                        "get_profile_summary", {"username": channel, "platform": "youtube"}
+                    )
+                ),
+            )
+            yt_audit = require_ok(
+                "audit_profile (youtube)",
+                as_dict(
+                    await session.call_tool(
+                        "audit_profile",
+                        {
+                            "username": channel,
+                            "post_limit": 12,
+                            "top_n": 5,
+                            "output": "spec",
+                            "platform": "youtube",
+                        },
+                    )
+                ),
+            )
+            assert len(yt_audit["dashboards"]) == 3
+            assert yt_audit["benchmark"]["engagement_rate_basis"] == "views"
+            print("✓ YouTube audit returned all 3 views with view-based engagement")
+
 
 
 def main() -> None:
