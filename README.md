@@ -321,7 +321,18 @@ APIFY_API_TOKEN='your-token' ./scripts/deploy_cloud_run.sh YOUR_PROJECT_ID us-ce
 
 The script manages Google Secret Manager, configures IAM roles, and provisions Cloud Run with 2 CPU / 2Gi RAM for Kaleido image rendering.
 
-**Shared cache.** Cloud Run recycles instances freely and scales horizontally, so a per-process cache is cold far more often than not — and every miss costs a 30–90s Apify run. The deploy provisions a `gs://<project>-social-analytics-cache` bucket and sets `CACHE_BACKEND=gcs`, so all instances share one cache. Lookups check local memory first and fall back to the bucket, promoting any shared hit into memory. The backend is strictly best-effort: if the bucket is unreachable, the server logs a warning and serves from memory rather than failing the call. Entries carry their own TTL (`PROFILE_CACHE_TTL_SECONDS`), and a 1-day lifecycle rule sweeps up objects that expiry already made unreadable. Local runs default to `CACHE_BACKEND=memory` and need no bucket.
+**Shared cache.** Cloud Run recycles instances freely and scales horizontally, so a per-process cache is cold far more often than not — and every miss costs an Apify run. The deploy provisions a `gs://<project>-social-analytics-cache` bucket and sets `CACHE_BACKEND=gcs`, so all instances share one cache. Lookups check local memory first and fall back to the bucket, promoting any shared hit into memory. The backend is strictly best-effort: if the bucket is unreachable, the server logs a warning and serves from memory rather than failing the call. Entries carry their own TTL (`PROFILE_CACHE_TTL_SECONDS`), and a 1-day lifecycle rule sweeps up objects that expiry already made unreadable. Local runs default to `CACHE_BACKEND=memory` and need no bucket.
+
+*Measured against the deployed service:*
+
+| Call | Latency | `cache_hit` |
+| --- | --- | --- |
+| `get_profile_summary` — cold (Apify run) | 8.37s | `false` |
+| `get_profile_summary` — warm (cache) | **0.38s** | `true` |
+
+That is a ~22x speedup, but read it in context: a profile scrape is one of the *lighter* Apify calls. A YouTube channel scrape took ~60–96s and `analyze_sentiment` ~96s in the same environment, so the absolute seconds saved on those is far larger while the ratio varies.
+
+The shared read path was verified directly rather than inferred: a cache entry was planted in the bucket for a handle that does not exist on Instagram, and the deployed service returned it in 2.75s with `cache_hit: true`. Without a bucket read it would have fallen through to Apify and errored, so this isolates the shared path from an ordinary in-process hit.
 
 **Timeouts.** `analyze_sentiment` runs two actors back to back (profile, then comments), and a YouTube channel scrape alone can take ~90s, so the deploy sets a 600s Cloud Run request timeout and a 240s per-actor Apify poll budget. Override either with `CLOUD_RUN_TIMEOUT_SECONDS` or `APIFY_RUN_TIMEOUT_SECONDS`:
 
