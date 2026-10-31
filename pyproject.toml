@@ -16,11 +16,13 @@ dependencies = [
   "python-dotenv>=1.0,<2",
   "vaderSentiment>=3.3,<4",
   "google-cloud-storage>=2.14,<4",
+  "typesafe-sdk>=0.7.5,<0.8",
 ]
 
 [project.scripts]
 social-analytics-mcp = "social_analytics_mcp.server:main"
 social-analytics = "social_analytics_mcp.cli:main"
+caption-hooks = "social_analytics_mcp.hooks.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["social_analytics_mcp*"]

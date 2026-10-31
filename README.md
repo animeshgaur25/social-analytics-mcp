@@ -437,6 +437,33 @@ social-analytics sentiment cristiano --post-limit 2 --include-comments
 
 ---
 
+## Caption Hook Scoring
+
+`caption-hooks` scores post captions on how well they hook readers, using TypeSafe's Jev. It needs `TYPESAFE_API_KEY` in the environment or `.env`.
+
+```bash
+caption-hooks examples/captions.jsonl --sort
+caption-hooks captions.csv --json > results.json
+caption-hooks captions.txt --weights hook_strength=0.5,call_to_action=0.25
+caption-hooks examples/captions.jsonl --dry-run   # print the exact request payloads, no API call
+```
+
+Input is a `.txt` file (one caption per line), a `.jsonl` file (strings or `{"id", "text"}` objects), or a `.csv` file with a `text` or `caption` column. Use `.jsonl` or `.csv` for captions that span several lines.
+
+Each caption is one request carrying six questions. Jev judges each dimension, and code combines the answers into a 0–100 composite:
+
+| Dimension | Question type | Default weight |
+| --- | --- | --- |
+| `hook_strength` | Score: does the first line make a scroller want to read on? | 0.35 |
+| `emotional_pull` | Score: how strong an emotional reaction is the caption likely to provoke? | 0.20 |
+| `relatability` | Score: could a typical follower see their own experience in it? | 0.15 |
+| `audience_question` | Noul: does it ask readers something they could answer in the comments? | 0.15 |
+| `call_to_action` | Noul for whether there is one, plus a Score for how specific it is | 0.15 |
+
+A Noul above 0.7 counts as yes and one below 0.3 as no. Anything between shows as `?` and is left out of the composite rather than counted as zero. A `~` marks a Score where Jev was split between distant levels. All question wording, weights, and thresholds live in [`social_analytics_mcp/hooks/questions.py`](social_analytics_mcp/hooks/questions.py). Offline tests: `python tests/test_hooks.py`.
+
+---
+
 ## Connecting to an MCP Client
 
 ### Stdio Transport (Claude Desktop / Cursor / Antigravity)
