@@ -1,0 +1,16 @@
+{
+  "name": "social-analytics",
+  "owner": {
+    "name": "Animesh Gaur"
+  },
+  "metadata": {
+    "description": "Instagram and YouTube analytics for Claude."
+  },
+  "plugins": [
+    {
+      "name": "social-analytics",
+      "source": "./plugin",
+      "description": "Instagram and YouTube analytics skill plus the social-analytics MCP server."
+    }
+  ]
+}

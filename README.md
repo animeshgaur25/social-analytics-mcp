@@ -464,6 +464,25 @@ A Noul above 0.7 counts as yes and one below 0.3 as no. Anything between shows a
 
 ---
 
+## Claude Skill & Plugin
+
+The repo ships a Claude Code plugin in [`plugin/`](plugin/) containing a `social-analytics` skill (when to use each tool, how to keep Apify spend down, how to read the numbers, report templates) plus this MCP server, launched via `uvx` with no clone needed.
+
+```bash
+export APIFY_API_TOKEN=your_apify_token
+```
+
+Then in Claude Code:
+
+```
+/plugin marketplace add animeshgaur25/social-analytics-mcp
+/plugin install social-analytics@social-analytics
+```
+
+See [`plugin/README.md`](plugin/README.md) for team-wide setup and for using the skill in Claude.ai / Claude Desktop.
+
+---
+
 ## Connecting to an MCP Client
 
 ### Stdio Transport (Claude Desktop / Cursor / Antigravity)

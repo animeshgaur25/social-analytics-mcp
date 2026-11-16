@@ -1,0 +1,10 @@
+{
+  "name": "social-analytics",
+  "version": "0.1.0",
+  "description": "Instagram and YouTube analytics for Claude: profile stats, engagement, charts, full audits and comment sentiment, via the social-analytics MCP server.",
+  "author": { "name": "Animesh Gaur" },
+  "homepage": "https://github.com/animeshgaur25/social-analytics-mcp",
+  "repository": "https://github.com/animeshgaur25/social-analytics-mcp",
+  "license": "MIT",
+  "keywords": ["instagram", "youtube", "analytics", "influencer", "mcp"]
+}

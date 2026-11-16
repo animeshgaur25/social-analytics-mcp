@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "social-analytics-mcp": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/animeshgaur25/social-analytics-mcp",
+        "social-analytics-mcp"
+      ],
+      "env": {
+        "APIFY_API_TOKEN": "${APIFY_API_TOKEN}"
+      }
+    }
+  }
+}
